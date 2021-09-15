@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GNU GPLv3
 
-pragma solidity ^0.8.2;
+pragma solidity ^0.8.7;
 
 import "@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol";
 
 /// @title ISanToken
 /// @author Angle Core Team
-/// @notice Interface for Angle's `SanToken` contract, that handles sanTokens, tokens that are given to SLPs
+/// @notice Interface for Angle's `SanToken` contract that handles sanTokens, tokens that are given to SLPs
 /// contributing to a collateral for a given stablecoin
 interface ISanToken is IERC20Upgradeable {
     // ================================== StableMaster =============================

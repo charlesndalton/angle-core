@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GNU GPLv3
 
-pragma solidity ^0.8.2;
+pragma solidity ^0.8.7;
 
 import "./PoolManagerInternal.sol";
 
@@ -45,15 +45,18 @@ contract PoolManager is PoolManagerInternal, IPoolManagerFunctions {
     // ========================= `StableMaster` Functions ==========================
 
     /// @notice Changes the references to contracts from this protocol with which this collateral `PoolManager` interacts
+    /// and propagates some references to the `perpetualManager` and `feeManager` contracts
     /// @param governorList List of the governor addresses of protocol
     /// @param guardian Address of the guardian of the protocol (it can be revoked)
     /// @param _perpetualManager New reference to the `PerpetualManager` contract containing all the logic for HAs
     /// @param _feeManager Reference to the `FeeManager` contract that will serve for the `PerpetualManager` contract
+    /// @param _oracle Reference to the `Oracle` contract that will serve for the `PerpetualManager` contract
     function deployCollateral(
         address[] memory governorList,
         address guardian,
         IPerpetualManager _perpetualManager,
-        IFeeManager _feeManager
+        IFeeManager _feeManager,
+        IOracle _oracle
     ) external override onlyRole(STABLEMASTER_ROLE) {
         // These references need to be stored to be able to propagate changes and maintain
         // the protocol's integrity when changes are posted from the `StableMaster`
@@ -68,13 +71,13 @@ contract PoolManager is PoolManagerInternal, IPoolManagerFunctions {
         _grantRole(GUARDIAN_ROLE, guardian);
 
         // Propagates the changes to the other involved contracts
-        perpetualManager.deployCollateral(governorList, guardian, feeManager);
-        feeManager.deployCollateral(governorList, guardian);
+        perpetualManager.deployCollateral(governorList, guardian, _feeManager, _oracle);
+        _feeManager.deployCollateral(governorList, guardian, address(_perpetualManager));
 
         // `StableMaster` and `PerpetualManager` need to have approval to directly transfer some of
         // this contract's tokens
         token.safeIncreaseAllowance(address(stableMaster), type(uint256).max);
-        token.safeIncreaseAllowance(address(perpetualManager), type(uint256).max);
+        token.safeIncreaseAllowance(address(_perpetualManager), type(uint256).max);
     }
 
     /// @notice Adds a new governor address and echoes it to other contracts
@@ -358,17 +361,14 @@ contract PoolManager is PoolManagerInternal, IPoolManagerFunctions {
         require(params.totalStrategyDebt == 0, "strategy still managing some funds");
         uint256 strategyListLength = strategyList.length;
         require(params.lastReport != 0 && strategyListLength >= 1, "invalid strategy");
-        // Checking the correctness of the platform and taking advantage of that to remove the platform
-        // from the strategyList
         // It has already been checked whether the strategy was a valid strategy
-        if (strategyListLength > 1) {
-            for (uint256 i = 0; i < strategyListLength - 1; i++) {
-                if (strategyList[i] == strategy) {
-                    strategyList[i] = strategyList[strategyListLength - 1];
-                    break;
-                }
+        for (uint256 i = 0; i < strategyListLength - 1; i++) {
+            if (strategyList[i] == strategy) {
+                strategyList[i] = strategyList[strategyListLength - 1];
+                break;
             }
         }
+
         strategyList.pop();
 
         // Update global parameters

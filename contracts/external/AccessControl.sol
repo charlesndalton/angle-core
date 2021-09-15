@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.7;
 
 import "@openzeppelin/contracts/utils/Context.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
@@ -150,7 +150,7 @@ abstract contract AccessControl is Context, IAccessControl {
      *
      * - the caller must have ``role``'s admin role.
      */
-    function grantRole(bytes32 role, address account) public virtual override onlyRole(getRoleAdmin(role)) {
+    function grantRole(bytes32 role, address account) external override onlyRole(getRoleAdmin(role)) {
         _grantRole(role, account);
     }
 
@@ -163,7 +163,7 @@ abstract contract AccessControl is Context, IAccessControl {
      *
      * - the caller must have ``role``'s admin role.
      */
-    function revokeRole(bytes32 role, address account) public virtual override onlyRole(getRoleAdmin(role)) {
+    function revokeRole(bytes32 role, address account) external override onlyRole(getRoleAdmin(role)) {
         _revokeRole(role, account);
     }
 
@@ -181,8 +181,8 @@ abstract contract AccessControl is Context, IAccessControl {
      *
      * - the caller must be `account`.
      */
-    function renounceRole(bytes32 role, address account) public virtual override {
-        require(account == _msgSender(), "AccessControl: can only renounce roles for self");
+    function renounceRole(bytes32 role, address account) external override {
+        require(account == _msgSender(), "can only renounce roles for self");
 
         _revokeRole(role, account);
     }
@@ -203,7 +203,7 @@ abstract contract AccessControl is Context, IAccessControl {
      * system imposed by {AccessControl}.
      * ====
      */
-    function _setupRole(bytes32 role, address account) internal virtual {
+    function _setupRole(bytes32 role, address account) internal {
         _grantRole(role, account);
     }
 
@@ -212,7 +212,7 @@ abstract contract AccessControl is Context, IAccessControl {
      *
      * Emits a {RoleAdminChanged} event.
      */
-    function _setRoleAdmin(bytes32 role, bytes32 adminRole) internal virtual {
+    function _setRoleAdmin(bytes32 role, bytes32 adminRole) internal {
         emit RoleAdminChanged(role, getRoleAdmin(role), adminRole);
         _roles[role].adminRole = adminRole;
     }

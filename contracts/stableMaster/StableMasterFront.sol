@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GNU GPLv3
 
-pragma solidity ^0.8.2;
+pragma solidity ^0.8.7;
 
 import "./StableMaster.sol";
 
@@ -31,7 +31,7 @@ contract StableMasterFront is StableMaster {
 
     // ============================= USERS =========================================
 
-    /// @notice Lets a user add collateral to the system to mint stablecoins
+    /// @notice Lets a user send collateral to the system to mint stablecoins
     /// @param amount Amount of collateral sent
     /// @param user Address of the contract or the person to give the minted tokens to
     /// @param poolManager Address of the `PoolManager` of the required collateral
@@ -40,6 +40,8 @@ contract StableMasterFront is StableMaster {
     /// @dev It is impossible to mint tokens and to have them sent to the zero address: there
     /// would be an issue with the `_mint` function called by the `AgToken` contract
     /// @dev The parameter `minStableAmount` serves as a slippage protection for users
+    /// @dev From a user perspective, this function is equivalent to a swap between collateral and
+    /// stablecoins
     function mint(
         uint256 amount,
         address user,
@@ -90,13 +92,13 @@ contract StableMasterFront is StableMaster {
         agToken.mint(user, amountForUserInStable);
     }
 
-    /// @notice Updates variables to take the burn of agTokens (stablecoins) into account, computes transaction
-    /// fees and gives collateral from the `PoolManager` in exchange for that
+    /// @notice Lets a user burn agTokens (stablecoins) and receive the collateral specified by the `poolManager`
+    /// in exchange
     /// @param amount Amount of stable asset burnt
     /// @param burner Address from which the agTokens will be burnt
     /// @param dest Address where collateral is going to be
     /// @param poolManager Collateral type requested by the user burning
-    /// @param minCollatAmount Minimum
+    /// @param minCollatAmount Minimum amount of collateral that the user is willing to get for this transaction
     /// @dev The `msg.sender` should have approval to burn from the `burner` or the `msg.sender` should be the `burner`
     /// @dev If there are not enough reserves this transaction will revert and the user will have to come back to the
     /// protocol with a correct amount. Checking for the reserves currently available in the `PoolManager`
@@ -117,17 +119,13 @@ contract StableMasterFront is StableMaster {
         _contractMapCheck(col);
         _whenNotPaused(STABLE, address(poolManager));
 
-        // If the amount is such that `stocksUsers` can become negative, then HAs and users actions should be paused
-        // This is likely to happen if users mint using one collateral type and in volume redeem another collateral type
-        // In this situation, governance should rapidly react to rebalance the `stocksUsers` between the concerned
-        // collateral types, or at least what is stored in the reserves through the `recoverERC20` function followed by a swap
-        // and then a transfer
-        if (amount > col.stocksUsers) {
-            _pause(keccak256(abi.encodePacked(STABLE, address(poolManager))));
-            // Pausing entry (and exits for HAs)
-            col.perpetualManager.pause();
-            return;
-        }
+        // Checking if the amount is not going to make the `stocksUsers` negative
+        // A situation like that is likely to happen if users mint using one collateral type and in volume redeem
+        // another collateral type
+        // In this situation, governance should rapidly react to pause the pool and then rebalance the `stocksUsers`
+        // between different collateral types, or at least rebalance what is stored in the reserves through
+        // the `recoverERC20` function followed by a swap and then a transfer
+        require(amount <= col.stocksUsers, "stocksUsers too small");
 
         // Burning the tokens will revert if there are not enough tokens in balance or if the `msg.sender`
         // does not have approval from the burner
@@ -167,7 +165,7 @@ contract StableMasterFront is StableMaster {
 
     // ============================== SLPs =========================================
 
-    /// @notice Lets a SLP enter the protocol by adding collateral to the system in exchange of sanTokens
+    /// @notice Lets a SLP enter the protocol by sending collateral to the system in exchange of sanTokens
     /// @param user Address of the SLP to send sanTokens to
     /// @param amount Amount of collateral sent
     /// @param poolManager Address of the `PoolManager` of the required collateral
@@ -188,8 +186,8 @@ contract StableMasterFront is StableMaster {
         col.sanToken.mint(user, (amount * BASE_TOKENS) / col.sanRate);
     }
 
-    /// @notice Updates variables to account for the burn of sanTokens by a SLP and gives the corresponding
-    /// collateral back in exchange
+    /// @notice Lets a SLP burn of sanTokens and receive the corresponding collateral back in exchange at the
+    /// current exchange rate between sanTokens and collateral
     /// @param amount Amount of sanTokens burnt by the SLP
     /// @param burner Address that will burn its sanTokens
     /// @param dest Address that will receive the collateral

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GNU GPLv3
 
-pragma solidity ^0.8.2;
+pragma solidity ^0.8.7;
 
 import "./IStableMaster.sol";
 
 /// @title ICore
 /// @author Angle Core Team
-/// @dev Interface for the core contract
+/// @dev Interface for the `Core` contract
 interface ICore {
     function revokeStableMaster(address stableMaster) external;
 

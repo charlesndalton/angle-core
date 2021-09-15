@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GNU GPLv3
 
-pragma solidity ^0.8.2;
+pragma solidity ^0.8.7;
 
 import "../interfaces/IAgToken.sol";
+import "../interfaces/IStableMaster.sol";
 // OpenZeppelin may update its version of the ERC20PermitUpgradeable token
 import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/draft-ERC20PermitUpgradeable.sol";
 
@@ -24,12 +25,12 @@ contract AgToken is IAgToken, ERC20PermitUpgradeable {
     /// @param name_ Name of the token
     /// @param symbol_ Symbol of the token
     /// @param stableMaster_ Reference to the `StableMaster` contract associated to this agToken
-    /// @dev By default, `agToken` are ERC-20 tokens with 18 decimals
+    /// @dev By default, agTokens are ERC-20 tokens with 18 decimals
     function initialize(
         string memory name_,
         string memory symbol_,
         address stableMaster_
-    ) public initializer {
+    ) external initializer {
         __ERC20Permit_init(name_);
         __ERC20_init(name_, symbol_);
         require(stableMaster_ != address(0), "zero address");
@@ -44,20 +45,33 @@ contract AgToken is IAgToken, ERC20PermitUpgradeable {
     }
 
     // ========================= External Functions ================================
+    // The following functions allow anyone to burn stablecoins without redeeming collateral
+    // in exchange for that
 
     /// @notice Destroys `amount` token from the caller without giving collateral back
     /// @param amount Amount to burn
-    function burnNoRedeem(uint256 amount) external {
+    /// @param poolManager Reference to the `PoolManager` contract for which the `stocksUsers` will
+    /// need to be updated
+    /// @dev When calling this function, people should specify the `poolManager` for which they want to decrease
+    /// the `stocksUsers`: this a way for the protocol to maintain healthy accounting variables
+    /// @dev This function is for instance to be used by governance to burn the tokens accumulated by the `BondingCurve`
+    /// contract
+    function burnNoRedeem(uint256 amount, address poolManager) external {
         _burn(msg.sender, amount);
+        IStableMaster(stableMaster).updateStocksUsers(amount, poolManager);
     }
 
     /// @notice Burns `amount` of agToken on behalf of another account without redeeming collateral back
     /// @param account Account to burn on behalf of
     /// @param amount Amount to burn
-    /// @dev This function is used in the `BondingCurve` where agTokens are burnt
-    /// and ANGLE tokens are given in exchange
-    function burnFromNoRedeem(address account, uint256 amount) external override {
+    /// @param poolManager Reference to the `PoolManager` contract for which the `stocksUsers` will need to be updated
+    function burnFromNoRedeem(
+        address account,
+        uint256 amount,
+        address poolManager
+    ) external {
         _burnFromNoRedeem(amount, account, msg.sender);
+        IStableMaster(stableMaster).updateStocksUsers(amount, poolManager);
     }
 
     // ========================= `StableMaster` Functions ==========================

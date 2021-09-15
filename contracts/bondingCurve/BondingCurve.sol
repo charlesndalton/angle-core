@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GNU GPLv3
 
-pragma solidity ^0.8.2;
+pragma solidity ^0.8.7;
 
 import "./BondingCurveEvents.sol";
 
@@ -11,7 +11,8 @@ import "./BondingCurveEvents.sol";
 contract BondingCurve is BondingCurveEvents, IBondingCurve, AccessControl, Pausable {
     using SafeERC20 for IERC20;
 
-    /// @notice Role for governors only
+    /// @notice Role for governors only: governor can change an oracle contract, recover tokens
+    /// or take actions that are going to modify the price of the tokens
     bytes32 public constant GOVERNOR_ROLE = keccak256("GOVERNOR_ROLE");
     /// @notice Role for guardians and governors
     bytes32 public constant GUARDIAN_ROLE = keccak256("GUARDIAN_ROLE");
@@ -29,6 +30,7 @@ contract BondingCurve is BondingCurveEvents, IBondingCurve, AccessControl, Pausa
     /// this is set to 0
     /// @dev The reference stablecoin may change, but it would imply a change in all oracles,
     /// so it's important to be wary when updating it
+    /// @dev The reference does not necessarily have to be an accepted stablecoin by the system
     address public referenceCoin = address(0);
 
     // ============================ Parameters =====================================
@@ -50,10 +52,10 @@ contract BondingCurve is BondingCurveEvents, IBondingCurve, AccessControl, Pausa
     // ============================ Modifier =======================================
 
     /// @notice Checks if the stablecoin is valid
-    /// @dev The idea is to verify if there is an oracle associated to this contract or if this coin
+    /// @dev This modifier verifies if there is an oracle associated to this contract or if this coin
     /// is the reference coin
     /// @dev It checks at the same time if `token` is non null. If `token` is not the reference then
-    /// `allowedStablecoins[address(0)] == address(0)`.
+    /// `allowedStablecoins[address(0)] == address(0)`
     modifier isValid(IAgToken token) {
         require(
             (address(allowedStablecoins[token]) != address(0)) ||
@@ -100,12 +102,13 @@ contract BondingCurve is BondingCurveEvents, IBondingCurve, AccessControl, Pausa
     /// @param _agToken Reference to the agToken used, that is the stablecoin used to buy the token associated to this
     /// bonding curve
     /// @param targetSoldTokenQuantity Target quantity of tokens to buy
-    function buySoldToken(IAgToken _agToken, uint256 targetSoldTokenQuantity)
-        external
-        override
-        whenNotPaused
-        isValid(_agToken)
-    {
+    /// @param maxAmountToPayInAgToken Maximum amount to pay in agTokens that the user is willing to pay to buy the
+    /// `targetSoldTokenQuantity`
+    function buySoldToken(
+        IAgToken _agToken,
+        uint256 targetSoldTokenQuantity,
+        uint256 maxAmountToPayInAgToken
+    ) external override whenNotPaused isValid(_agToken) {
         require(targetSoldTokenQuantity > 0, "incorrect value");
         // Computing the number of reference stablecoins to burn to get the desired quantity
         // of tokens sold by this contract
@@ -124,15 +127,15 @@ contract BondingCurve is BondingCurveEvents, IBondingCurve, AccessControl, Pausa
             // which are in base `BASE_TOKENS`
             amountToPayInAgToken = (amountToPayInReference * BASE_TOKENS) / oracleValue;
         }
-        require(amountToPayInAgToken > 0, "oracle attack or incorrect value");
+        require(amountToPayInAgToken > 0 && amountToPayInAgToken <= maxAmountToPayInAgToken, "incorrect amount to pay");
+
+        // Transferring the correct amount of agToken
+        _agToken.transferFrom(msg.sender, address(this), amountToPayInAgToken);
 
         emit TokenSale(targetSoldTokenQuantity, address(_agToken), amountToPayInAgToken);
-
         // Updating the internal variables
         tokensSold += targetSoldTokenQuantity;
 
-        // Burning the correct amount of agToken
-        _agToken.burnFromNoRedeem(msg.sender, amountToPayInAgToken);
         // Transfering the sold tokens to the caller
         soldToken.safeTransfer(msg.sender, targetSoldTokenQuantity);
     }
@@ -142,7 +145,7 @@ contract BondingCurve is BondingCurveEvents, IBondingCurve, AccessControl, Pausa
     /// @notice Returns the current price of the token (expressed in reference)
     /// @dev This is an external utility function
     /// @dev More generally than the expression used, the value of the price is:
-    /// `startPrice/(1-tokensSoldInTx/tokensToSellInTotal)^power` with `power = 2`
+    /// `startPrice / (1 - tokensSoldInTx / tokensToSellInTotal) ^ 2`
     /// @dev The precision of this function is not that important as it is a view function anyone can query
     function getCurrentPrice() external view returns (uint256) {
         if (_getQuantityLeftToSell() == 0) {
@@ -165,7 +168,7 @@ contract BondingCurve is BondingCurveEvents, IBondingCurve, AccessControl, Pausa
 
     // ============================ GOVERNANCE =====================================
 
-    // ========================== Governor Function ================================
+    // ========================== Governor Functions ===============================
 
     /// @notice Transfers tokens from the bonding curve to another address
     /// @param tokenAddress Address of the token to recover
@@ -189,7 +192,21 @@ contract BondingCurve is BondingCurveEvents, IBondingCurve, AccessControl, Pausa
         emit Recovered(tokenAddress, to, amountToRecover);
     }
 
-    // ========================== Guardian Functions ===============================
+    /// @notice Changes the oracle associated to a stablecoin
+    /// @param _agToken Reference to the agToken
+    /// @param _oracle Reference to the oracle that will be used to have the price of this stablecoin in reference
+    /// @dev Oracle contract should give a price with respect to reference
+    /// @dev This function should only be called by governance as it can be used to manipulate prices
+    function changeOracle(IAgToken _agToken, IOracle _oracle)
+        external
+        override
+        onlyRole(GOVERNOR_ROLE)
+        isValid(_agToken)
+    {
+        require((address(_oracle) != address(0)), "oracle required");
+        allowedStablecoins[_agToken] = _oracle;
+        emit ModifiedStablecoin(address(_agToken), referenceCoin == address(_agToken), address(_oracle));
+    }
 
     /// @notice Allows a new stablecoin
     /// @param _agToken Reference to the agToken
@@ -198,11 +215,13 @@ contract BondingCurve is BondingCurveEvents, IBondingCurve, AccessControl, Pausa
     /// @dev To set a new reference coin, the old reference must have been revoked before
     /// @dev Calling this function for a stablecoin that already exists will just change its oracle if the
     /// agToken was already reference, and also set a new reference if the coin was already existing
+    /// @dev Since this function could be used to deploy a new stablecoin with a really low oracle value, it has
+    /// been made governor only
     function allowNewStablecoin(
         IAgToken _agToken,
         IOracle _oracle,
         uint256 _isReference
-    ) external onlyRole(GUARDIAN_ROLE) {
+    ) external onlyRole(GOVERNOR_ROLE) {
         require((_isReference == 0) || (_isReference == 1), "incorrect reference");
         require(address(_agToken) != address(0), "incorrect address");
         // It is impossible to change reference if the reference has not been revoked before
@@ -220,37 +239,12 @@ contract BondingCurve is BondingCurveEvents, IBondingCurve, AccessControl, Pausa
         emit ModifiedStablecoin(address(_agToken), (_isReference == 1), address(_oracle));
     }
 
-    /// @notice Changes the oracle associated to a stablecoin
-    /// @param _agToken Reference to the agToken
-    /// @param _oracle Reference to the oracle that will be used to have the price of this stablecoin in reference
-    /// @dev Oracle contract should be done with respect to reference
-    function changeOracle(IAgToken _agToken, IOracle _oracle)
-        external
-        override
-        onlyRole(GOVERNOR_ROLE)
-        isValid(_agToken)
-    {
-        require((address(_oracle) != address(0)), "oracle required");
-        allowedStablecoins[_agToken] = _oracle;
-        emit ModifiedStablecoin(address(_agToken), referenceCoin == address(_agToken), address(_oracle));
-    }
-
-    /// @notice Revokes a stablecoin as a medium of payment
-    /// @param _agToken Reference to the agToken
-    function revokeStablecoin(IAgToken _agToken) external onlyRole(GUARDIAN_ROLE) {
-        if (referenceCoin == address(_agToken)) {
-            referenceCoin = address(0);
-        }
-        delete allowedStablecoins[_agToken];
-
-        emit RevokedStablecoin(address(_agToken));
-    }
-
     /// @notice Changes the start price (in reference)
     /// @param _startPrice New start price for the formula
     /// @dev This function may be useful to help re-collateralize the protocol in case of distress
     /// as it could allow to buy governance tokens at a discount
-    function changeStartPrice(uint256 _startPrice) external onlyRole(GUARDIAN_ROLE) {
+    /// @dev As this function can manipulate the price, it has to be governor only
+    function changeStartPrice(uint256 _startPrice) external onlyRole(GOVERNOR_ROLE) {
         require(_startPrice > 0, "incorrect start price");
         startPrice = _startPrice;
 
@@ -259,8 +253,28 @@ contract BondingCurve is BondingCurveEvents, IBondingCurve, AccessControl, Pausa
 
     /// @notice Changes the total amount of tokens that can be sold with this bonding curve
     /// @param _totalTokensToSell New total amount of tokens to sell
-    function changeTokensToSell(uint256 _totalTokensToSell) external onlyRole(GUARDIAN_ROLE) {
+    /// @dev As this function can manipulate the price, it has to be governor only
+    function changeTokensToSell(uint256 _totalTokensToSell) external onlyRole(GOVERNOR_ROLE) {
         _changeTokensToSell(_totalTokensToSell);
+    }
+
+    // ========================== Guardian Functions ===============================
+
+    /// @notice Revokes a stablecoin as a medium of payment
+    /// @param _agToken Reference to the agToken
+    /// @dev If the `referenceCoin` is revoked, contract should be paused to let governance update parameters
+    /// like the `oracle` contracts associated to each allowed stablecoin or the start price
+    /// @dev It is also possible that the contract works without a reference stablecoin: if the reference coin
+    /// was USD but agUSD are no longer accepted, we may still want all the oracles and prices to be expressed
+    /// in USD
+    function revokeStablecoin(IAgToken _agToken) external onlyRole(GUARDIAN_ROLE) {
+        if (referenceCoin == address(_agToken)) {
+            referenceCoin = address(0);
+            _pause();
+        }
+        delete allowedStablecoins[_agToken];
+
+        emit RevokedStablecoin(address(_agToken));
     }
 
     /// @notice Pauses the possibility to buy `soldToken` from the contract
@@ -302,12 +316,12 @@ contract BondingCurve is BondingCurveEvents, IBondingCurve, AccessControl, Pausa
         uint256 leftToSell = _getQuantityLeftToSell();
         require(targetQuantity < leftToSell, "not enough token left to sell");
 
-        // The value to compute is, with `power = 2`:
+        // The global value to compute is (with `power = 2` here):
         // `startPrice * totalTokensToSell **(power) * (leftToSell ** (power - 1) - (leftToSell - targetQuantity) ** (power - 1)) /((power - 1) * BASE_TOKENS * leftToSell ** (power - 1) * (leftToSell - targetQuantity) ** (power - 1))`
         // If `totalTokensToSell` is `10**18 * (10**9)` (the maximum we could sell), then `totalTokensToSell ** power` is `(10**27)**power`
         // And `leftToSell ** (power - 1) ` is inferior to `totalTokensToSell ** power`
         // In this case the fact that power = 2 simplifies the computation
-        // Computation can hence be done as follows progressively without doing all the multiplications first
+        // Computation can hence be done as follows progressively without doing all the multiplications first to avoid overflows
         value = (totalTokensToSell**2) / leftToSell;
         value = (value * startPrice) / BASE_TOKENS;
         value = (value * targetQuantity) / (leftToSell - targetQuantity);

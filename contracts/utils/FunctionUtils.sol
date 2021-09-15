@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GNU GPLv3
 
-pragma solidity ^0.8.2;
+pragma solidity ^0.8.7;
 
 /// @title FunctionUtils
 /// @author Angle Core Team
@@ -35,14 +35,14 @@ contract FunctionUtils {
         } else {
             uint256 lower;
             uint256 upper = xArray.length - 1;
-            uint256 mid = (upper - lower) / 2;
+            uint256 mid;
             while (upper - lower > 1) {
+                mid = lower + (upper - lower) / 2;
                 if (xArray[mid] <= x) {
                     lower = mid;
                 } else {
                     upper = mid;
                 }
-                mid = lower + (upper - lower) / 2;
             }
             if (yArray[upper] > yArray[lower]) {
                 // There is no risk of overflow here as in the product of the difference of `y`
@@ -65,8 +65,9 @@ contract FunctionUtils {
     /// @param xArray List of breaking points (in ascending order) that define the linear by part function
     /// @param yArray List of values at breaking points (not necessarily in ascending order)
     /// @dev This function is a way to avoid some governance attacks or errors
-    /// @dev The modifier checks if the arrays have the same length, if the values in the xArray are in ascending order
-    /// and if the values in the `xArray` and in the `yArray` are not superior to `BASE_PARAMS` (in case of)
+    /// @dev The modifier checks if the arrays have a non null length, if their length is the same, if the values
+    /// in the `xArray` are in ascending order and if the values in the `xArray` and in the `yArray` are not superior
+    /// to `BASE_PARAMS`
     modifier onlyCompatibleInputArrays(uint64[] memory xArray, uint64[] memory yArray) {
         require(xArray.length == yArray.length && xArray.length > 0, "incorrect array length");
         for (uint256 i = 0; i <= yArray.length - 1; i++) {

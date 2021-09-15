@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GNU GPLv3
 
-pragma solidity ^0.8.2;
+pragma solidity ^0.8.7;
 
 import "./FeeManagerEvents.sol";
 
@@ -24,7 +24,7 @@ contract FeeManagerStorage is FeeManagerEvents {
 
     /// @notice Bonus - Malus Fee, means that if the `fee > BASE_PARAMS` then agents incur a malus and will
     /// have larger fees, while `fee < BASE_PARAMS` they incur a smaller fee than what they would have if fees
-    /// just consisted in what was obtained using coverage
+    /// just consisted in what was obtained using the hedge ratio
     /// @notice Values of the collateral ratio where mint transaction fees will change for users
     /// It should be ranked in ascending order
     uint256[] public xBonusMalusMint;
@@ -48,7 +48,7 @@ contract FeeManagerStorage is FeeManagerEvents {
 
     /// @notice Bonus - Malus HA deposit Fee, means that if the `fee > BASE_PARAMS` then HAs incur a malus and
     /// will have larger fees, while `fee < BASE_PARAMS` they incur a smaller fee than what they would have if
-    /// fees just consisted in what was obtained using coverage
+    /// fees just consisted in what was obtained using hedge ratio
     uint64 public haFeeDeposit;
     /// @notice Bonus - Malus HA withdraw Fee
     uint64 public haFeeWithdraw;

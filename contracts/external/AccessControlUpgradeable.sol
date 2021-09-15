@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.7;
 
-import "@openzeppelin/contracts-upgradeable/utils/ContextUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/StringsUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
@@ -50,9 +49,8 @@ import "../interfaces/IAccessControl.sol";
  * grant and revoke this role. Extra precautions should be taken to secure
  * accounts that have been granted it.
  */
-abstract contract AccessControlUpgradeable is Initializable, ContextUpgradeable, IAccessControl {
+abstract contract AccessControlUpgradeable is Initializable, IAccessControl {
     function __AccessControl_init() internal initializer {
-        __Context_init_unchained();
         __AccessControl_init_unchained();
     }
 
@@ -105,7 +103,7 @@ abstract contract AccessControlUpgradeable is Initializable, ContextUpgradeable,
      * _Available since v4.1._
      */
     modifier onlyRole(bytes32 role) {
-        _checkRole(role, _msgSender());
+        _checkRole(role, msg.sender);
         _;
     }
 
@@ -158,7 +156,7 @@ abstract contract AccessControlUpgradeable is Initializable, ContextUpgradeable,
      *
      * - the caller must have ``role``'s admin role.
      */
-    function grantRole(bytes32 role, address account) public virtual override onlyRole(getRoleAdmin(role)) {
+    function grantRole(bytes32 role, address account) external override onlyRole(getRoleAdmin(role)) {
         _grantRole(role, account);
     }
 
@@ -171,7 +169,7 @@ abstract contract AccessControlUpgradeable is Initializable, ContextUpgradeable,
      *
      * - the caller must have ``role``'s admin role.
      */
-    function revokeRole(bytes32 role, address account) public virtual override onlyRole(getRoleAdmin(role)) {
+    function revokeRole(bytes32 role, address account) external override onlyRole(getRoleAdmin(role)) {
         _revokeRole(role, account);
     }
 
@@ -189,8 +187,8 @@ abstract contract AccessControlUpgradeable is Initializable, ContextUpgradeable,
      *
      * - the caller must be `account`.
      */
-    function renounceRole(bytes32 role, address account) public virtual override {
-        require(account == _msgSender(), "AccessControl: can only renounce roles for self");
+    function renounceRole(bytes32 role, address account) external override {
+        require(account == msg.sender, "AccessControl: can only renounce roles for self");
 
         _revokeRole(role, account);
     }
@@ -211,7 +209,7 @@ abstract contract AccessControlUpgradeable is Initializable, ContextUpgradeable,
      * system imposed by {AccessControl}.
      * ====
      */
-    function _setupRole(bytes32 role, address account) internal virtual {
+    function _setupRole(bytes32 role, address account) internal {
         _grantRole(role, account);
     }
 
@@ -220,7 +218,7 @@ abstract contract AccessControlUpgradeable is Initializable, ContextUpgradeable,
      *
      * Emits a {RoleAdminChanged} event.
      */
-    function _setRoleAdmin(bytes32 role, bytes32 adminRole) internal virtual {
+    function _setRoleAdmin(bytes32 role, bytes32 adminRole) internal {
         emit RoleAdminChanged(role, getRoleAdmin(role), adminRole);
         _roles[role].adminRole = adminRole;
     }
@@ -228,14 +226,14 @@ abstract contract AccessControlUpgradeable is Initializable, ContextUpgradeable,
     function _grantRole(bytes32 role, address account) internal {
         if (!hasRole(role, account)) {
             _roles[role].members[account] = true;
-            emit RoleGranted(role, account, _msgSender());
+            emit RoleGranted(role, account, msg.sender);
         }
     }
 
     function _revokeRole(bytes32 role, address account) internal {
         if (hasRole(role, account)) {
             _roles[role].members[account] = false;
-            emit RoleRevoked(role, account, _msgSender());
+            emit RoleRevoked(role, account, msg.sender);
         }
     }
 

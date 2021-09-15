@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GNU GPLv3
 
-pragma solidity ^0.8.2;
+pragma solidity ^0.8.7;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
@@ -27,5 +27,5 @@ contract StakingRewardsEvents {
 
     event Recovered(address indexed tokenAddress, address indexed to, uint256 amount);
 
-    event RewardsDistributorUpdated(address indexed _rewardsDistributor);
+    event RewardsDistributionUpdated(address indexed _rewardsDistribution);
 }

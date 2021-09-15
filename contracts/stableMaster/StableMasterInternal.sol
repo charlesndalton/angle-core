@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GNU GPLv3
 
-pragma solidity ^0.8.2;
+pragma solidity ^0.8.7;
 
 import "./StableMasterStorage.sol";
 
@@ -90,8 +90,8 @@ contract StableMasterInternal is StableMasterStorage, PausableMapUpgradeable {
     /// @param amount Amount of collateral in the transaction to get stablecoins
     /// @param col Struct for the collateral of interest
     /// @return feeMint Mint Fees taken to users expressed in collateral
-    /// @dev Fees depend on the coverage ratio that is the ratio between what is covered by HAs and what should be covered
-    /// @dev The more is covered by HAs, the smaller fees are expected to be
+    /// @dev Fees depend on the hedge ratio that is the ratio between what is hedged by HAs and what should be hedged
+    /// @dev The more is hedged by HAs, the smaller fees are expected to be
     /// @dev Fees are also corrected by the `bonusMalusMint` parameter which induces a dependence in collateral ratio
     function _computeFeeMint(uint256 amount, Collateral storage col) internal view returns (uint256 feeMint) {
         uint64 feeMint64;
@@ -100,9 +100,9 @@ contract StableMasterInternal is StableMasterStorage, PausableMapUpgradeable {
             // ratio
             feeMint64 = col.feeData.yFeeMint[0];
         } else {
-            uint64 coverageRatio = _computeCoverageRatio(amount + col.stocksUsers, col);
+            uint64 hedgeRatio = _computeHedgeRatio(amount + col.stocksUsers, col);
             // Computing the fees based on the spread
-            feeMint64 = _piecewiseLinear(coverageRatio, col.feeData.xFeeMint, col.feeData.yFeeMint);
+            feeMint64 = _piecewiseLinear(hedgeRatio, col.feeData.xFeeMint, col.feeData.yFeeMint);
         }
         // Fees could in some occasions depend on other factors like collateral ratio
         // Keepers are the ones updating this part of the fees
@@ -114,8 +114,8 @@ contract StableMasterInternal is StableMasterStorage, PausableMapUpgradeable {
     /// @param col Struct for the collateral of interest
     /// @return feeBurn Burn fees taken to users expressed in collateral
     /// @dev The amount is obtained after the amount of agTokens sent is converted in collateral
-    /// @dev Fees depend on the coverage ratio that is the ratio between what is covered by HAs and what should be covered
-    /// @dev The more is covered by HAs, the higher fees are expected to be
+    /// @dev Fees depend on the hedge ratio that is the ratio between what is hedged by HAs and what should be hedged
+    /// @dev The more is hedged by HAs, the higher fees are expected to be
     /// @dev Fees are also corrected by the `bonusMalusBurn` parameter which induces a dependence in collateral ratio
     function _computeFeeBurn(uint256 amount, Collateral storage col) internal view returns (uint256 feeBurn) {
         uint64 feeBurn64;
@@ -123,32 +123,28 @@ contract StableMasterInternal is StableMasterStorage, PausableMapUpgradeable {
             // Avoiding an external call if fees are constant
             feeBurn64 = col.feeData.yFeeBurn[0];
         } else {
-            uint64 coverageRatio = _computeCoverageRatio(col.stocksUsers - amount, col);
+            uint64 hedgeRatio = _computeHedgeRatio(col.stocksUsers - amount, col);
             // Computing the fees based on the spread
-            feeBurn64 = _piecewiseLinear(coverageRatio, col.feeData.xFeeBurn, col.feeData.yFeeBurn);
+            feeBurn64 = _piecewiseLinear(hedgeRatio, col.feeData.xFeeBurn, col.feeData.yFeeBurn);
         }
         // Fees could in some occasions depend on other factors like collateral ratio
         // Keepers are the ones updating this part of the fees
         feeBurn = (feeBurn64 * col.feeData.bonusMalusBurn) / BASE_PARAMS;
     }
 
-    /// @notice Computes the coverage ratio that is the ratio between the amount of collateral covered by HAs
-    /// divided by the amount that should be covered
-    /// @param newStocksUsers Value of the collateral from users to cover
+    /// @notice Computes the hedge ratio that is the ratio between the amount of collateral hedged by HAs
+    /// divided by the amount that should be hedged
+    /// @param newStocksUsers Value of the collateral from users to hedge
     /// @param col Struct for the collateral of interest
-    /// @return ratio Ratio between what's covered divided what's to cover
+    /// @return ratio Ratio between what's hedged divided what's to hedge
     /// @dev This function is typically called to compute mint or burn fees
     /// @dev It seeks from the `PerpetualManager` contract associated to the collateral the total amount
-    /// already covered by HAs and compares it to the amount to cover
-    function _computeCoverageRatio(uint256 newStocksUsers, Collateral storage col)
-        internal
-        view
-        returns (uint64 ratio)
-    {
-        // Fetching the amount covered by HAs from the corresponding `perpetualManager` contract
-        uint256 totalCoveredAmount = col.perpetualManager.totalCoveredAmount();
-        newStocksUsers = (col.feeData.targetHACoverage * newStocksUsers) / BASE_PARAMS;
-        if (newStocksUsers > totalCoveredAmount) ratio = uint64((totalCoveredAmount * BASE_PARAMS) / newStocksUsers);
+    /// already hedged by HAs and compares it to the amount to hedge
+    function _computeHedgeRatio(uint256 newStocksUsers, Collateral storage col) internal view returns (uint64 ratio) {
+        // Fetching the amount hedged by HAs from the corresponding `perpetualManager` contract
+        uint256 totalHedgeAmount = col.perpetualManager.totalHedgeAmount();
+        newStocksUsers = (col.feeData.targetHAHedge * newStocksUsers) / BASE_PARAMS;
+        if (newStocksUsers > totalHedgeAmount) ratio = uint64((totalHedgeAmount * BASE_PARAMS) / newStocksUsers);
         else ratio = uint64(BASE_PARAMS);
     }
 }

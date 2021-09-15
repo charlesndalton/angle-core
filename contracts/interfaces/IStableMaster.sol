@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GNU GPLv3
 
-pragma solidity ^0.8.2;
+pragma solidity ^0.8.7;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
@@ -15,25 +15,25 @@ import "./ISanToken.sol";
 // related to a given collateral pool (associated to the stablecoin)
 struct MintBurnData {
     // Values of the thresholds to compute the minting fees
-    // depending on HA coverage (scaled by `BASE_PARAMS`)
+    // depending on HA hedge (scaled by `BASE_PARAMS`)
     uint64[] xFeeMint;
     // Values of the fees at thresholds (scaled by `BASE_PARAMS`)
     uint64[] yFeeMint;
     // Values of the thresholds to compute the burning fees
-    // depending on HA coverage (scaled by `BASE_PARAMS`)
+    // depending on HA hedge (scaled by `BASE_PARAMS`)
     uint64[] xFeeBurn;
     // Values of the fees at thresholds (scaled by `BASE_PARAMS`)
     uint64[] yFeeBurn;
     // Max proportion of collateral from users that can be covered by HAs
     // It is exactly the same as the parameter of the same name in `PerpetualManager`, whenever one is updated
     // the other changes accordingly
-    uint64 targetHACoverage;
+    uint64 targetHAHedge;
     // Minting fees correction set by the `FeeManager` contract: they are going to be multiplied
-    // to the value of the fees computed using the coverage curve
+    // to the value of the fees computed using the hedge curve
     // Scaled by `BASE_PARAMS`
     uint64 bonusMalusMint;
     // Burning fees correction set by the `FeeManager` contract: they are going to be multiplied
-    // to the value of the fees computed using the coverage curve
+    // to the value of the fees computed using the hedge curve
     // Scaled by `BASE_PARAMS`
     uint64 bonusMalusBurn;
     // Parameter used to limit the number of stablecoins that can be issued using the concerned collateral
@@ -49,7 +49,7 @@ struct SLPData {
     // Fees accumulated from previous blocks and to be distributed to SLPs
     uint256 lockedInterests;
     // Max interests used to update the `sanRate` in a single block
-    // should be in collateral token base
+    // Should be in collateral token base
     uint256 maxInterestsDistributed;
     // Amount of fees left aside for SLPs and that will be distributed
     // when the protocol is collateralized back again
@@ -103,6 +103,10 @@ interface IStableMasterFunctions {
         uint64 _slippageFee
     ) external;
 
+    // ============================== AgToken ======================================
+
+    function updateStocksUsers(uint256 amount, address poolManager) external;
+
     // ============================= Governance ====================================
 
     function setCore(address newCore) external;
@@ -115,12 +119,35 @@ interface IStableMasterFunctions {
 
     function revokeGuardian(address oldGuardian) external;
 
-    function setTargetHACoverage(uint64 _targetHACoverage) external;
+    function setCapOnStableAndMaxInterests(
+        uint256 _capOnStableMinted,
+        uint256 _maxInterestsDistributed,
+        IPoolManager poolManager
+    ) external;
+
+    function setIncentivesForSLPs(
+        uint64 _feesForSLPs,
+        uint64 _interestsForSLPs,
+        IPoolManager poolManager
+    ) external;
+
+    function setUserFees(
+        IPoolManager poolManager,
+        uint64[] memory _xFee,
+        uint64[] memory _yFee,
+        uint8 _mint
+    ) external;
+
+    function setTargetHAHedge(uint64 _targetHAHedge) external;
+
+    function pause(bytes32 agent, IPoolManager poolManager) external;
+
+    function unpause(bytes32 agent, IPoolManager poolManager) external;
 }
 
 /// @title IStableMaster
 /// @author Angle Core Team
-/// @notice Previous interace with additionnal getters for public variables and mappings
+/// @notice Previous interface with additionnal getters for public variables and mappings
 interface IStableMaster is IStableMasterFunctions {
     function agToken() external view returns (address);
 

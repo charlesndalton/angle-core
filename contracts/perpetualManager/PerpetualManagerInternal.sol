@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GNU GPLv3
 
-pragma solidity ^0.8.2;
+pragma solidity ^0.8.7;
 
 import "./PerpetualManagerStorage.sol";
 
@@ -19,16 +19,16 @@ contract PerpetualManagerInternal is PerpetualManagerStorage {
     /// in the contract
     /// @param perpetualID ID of the perpetual
     /// @param perpetual Data of the perpetual
-    function _cashOutPerpetual(uint256 perpetualID, Perpetual memory perpetual) internal {
+    function _closePerpetual(uint256 perpetualID, Perpetual memory perpetual) internal {
         // Handling the staking logic
-        // Reward should always be updated before the `totalCoveredAmount`
+        // Reward should always be updated before the `totalHedgeAmount`
         // Rewards are distributed to the perpetual which is liquidated
-        uint256 coverage = perpetual.committedAmount * perpetual.entryRate;
-        _getReward(perpetualID, coverage);
+        uint256 hedge = perpetual.committedAmount * perpetual.entryRate;
+        _getReward(perpetualID, hedge);
         delete perpetualRewardPerTokenPaid[perpetualID];
 
-        // Updating `totalCoveredAmount` to represent the fact that less money is insured
-        totalCoveredAmount -= coverage / _collatBase;
+        // Updating `totalHedgeAmount` to represent the fact that less money is insured
+        totalHedgeAmount -= hedge / _collatBase;
 
         _burn(perpetualID);
     }
@@ -70,7 +70,7 @@ contract PerpetualManagerInternal is PerpetualManagerStorage {
         uint256 liquidated;
         (uint256 cashOutAmount, uint256 reachMaintenanceMargin) = _getCashOutAmount(perpetual, rateDown);
         if (cashOutAmount == 0 || reachMaintenanceMargin == 1) {
-            _cashOutPerpetual(perpetualID, perpetual);
+            _closePerpetual(perpetualID, perpetual);
             liquidated = 1;
         }
         return (cashOutAmount, liquidated);
@@ -81,7 +81,7 @@ contract PerpetualManagerInternal is PerpetualManagerStorage {
     /// @notice Gets the current cash out amount of a perpetual
     /// @param perpetual Data of the concerned perpetual
     /// @param rate Value of the oracle
-    /// @return cashOutAmount Amount that the HA could get by cashing out this perpetual
+    /// @return cashOutAmount Amount that the HA could get by closing this perpetual
     /// @return reachMaintenanceMargin Whether the position of the perpetual is now too small
     /// compared with its initial position
     /// @dev Refer to the whitepaper or the doc for the formulas of the cash out amount
@@ -125,43 +125,45 @@ contract PerpetualManagerInternal is PerpetualManagerStorage {
     /// @dev Perpetual exchange protocols typically compute liquidation fees using an equivalent of the `committedAmount`,
     /// this is not the case here
     function _computeKeeperLiquidationFees(uint256 cashOutAmount) internal view returns (uint256 keeperFees) {
-        keeperFees = (cashOutAmount * keeperFeesRatio) / BASE_PARAMS;
+        keeperFees = (cashOutAmount * keeperFeesLiquidationRatio) / BASE_PARAMS;
         keeperFees = keeperFees < keeperFeesLiquidationCap ? keeperFees : keeperFeesLiquidationCap;
     }
 
-    /// @notice Gets the value of the coverage ratio that is the ratio between the amount currently covered by HAs
-    /// and the target amount that should be covered by them
-    /// @param currentCAmount Amount currently covered by HAs
-    /// @return ratio Ratio between the amount currently collateral and the target amount to cover
-    function _computeCoverageRatio(uint256 currentCAmount) internal view returns (uint64 ratio) {
-        // Fetching info from the `StableMaster`: the amount to cover is based on the `stocksUsers`
+    /// @notice Gets the value of the hedge ratio that is the ratio between the amount currently hedged by HAs
+    /// and the target amount that should be hedged by them
+    /// @param currentHedgeAmount Amount currently covered by HAs
+    /// @return ratio Ratio between the amount of collateral (in stablecoin value) currently hedged
+    /// and the target amount to hedge
+    function _computeHedgeRatio(uint256 currentHedgeAmount) internal view returns (uint64 ratio) {
+        // Fetching info from the `StableMaster`: the amount to hedge is based on the `stocksUsers`
         // of the given collateral
-        uint256 targetCAmount = (_stableMaster.getStocksUsers() * targetHACoverage) / BASE_PARAMS;
-        if (currentCAmount < targetCAmount) ratio = uint64((currentCAmount * BASE_PARAMS) / targetCAmount);
+        uint256 targetHedgeAmount = (_stableMaster.getStocksUsers() * targetHAHedge) / BASE_PARAMS;
+        if (currentHedgeAmount < targetHedgeAmount)
+            ratio = uint64((currentHedgeAmount * BASE_PARAMS) / targetHedgeAmount);
         else ratio = uint64(BASE_PARAMS);
     }
 
     // =========================== Fee Computation =================================
 
-    /// @notice Gets the net margin corrected from the fees in case of perpetual creation
+    /// @notice Gets the net margin corrected from the fees at perpetual opening
     /// @param margin Amount brought in the perpetual at creation
-    /// @param totalCoveredAmountUpdate Amount of stablecoins that this perpetual is going to insure
+    /// @param totalHedgeAmountUpdate Amount of stablecoins that this perpetual is going to insure
     /// @param committedAmount Committed amount in the perpetual, we need it to compute the fees
     /// paid by the HA
     /// @return netMargin Amount that will be written in the perpetual as the `margin`
     /// @dev The amount of stablecoins insured by a perpetual is `committedAmount * oracleRate / _collatBase`
-    function _getNetMarginCreation(
+    function _getNetMargin(
         uint256 margin,
-        uint256 totalCoveredAmountUpdate,
+        uint256 totalHedgeAmountUpdate,
         uint256 committedAmount
     ) internal view returns (uint256 netMargin) {
-        // Checking if the HA has the right to create a perpetual with such amount
-        // If HAs cover more than the target amount, then new HAs will not be able to create perpetuals
-        // The amount covered by HAs after the creation of the perpetual is going to be:
-        uint64 ratio = _computeCoverageRatio(totalCoveredAmount + totalCoveredAmountUpdate);
+        // Checking if the HA has the right to open a perpetual with such amount
+        // If HAs hedge more than the target amount, then new HAs will not be able to create perpetuals
+        // The amount hedged by HAs after opening the perpetual is going to be:
+        uint64 ratio = _computeHedgeRatio(totalHedgeAmount + totalHedgeAmountUpdate);
         require(ratio < uint64(BASE_PARAMS), "too much collateral covered");
         // Computing the net margin of HAs to store in the perpetual: it consists simply in deducing fees
-        // Those depend on how much is already covered by HAs compared with what's to cover
+        // Those depend on how much is already hedged by HAs compared with what's to hedge
         uint256 haFeesDeposit = (haBonusMalusDeposit * _piecewiseLinear(ratio, xHAFeesDeposit, yHAFeesDeposit)) /
             BASE_PARAMS;
         // Fees are rounded to the advantage of the protocol
@@ -171,15 +173,15 @@ contract PerpetualManagerInternal is PerpetualManagerStorage {
         netMargin = margin - haFeesDeposit;
     }
 
-    /// @notice Gets the net amount to give to a HA (corrected from the fees) in case of a perpetual cash out
+    /// @notice Gets the net amount to give to a HA (corrected from the fees) in case of a perpetual closing
     /// @param committedAmount Committed amount in the perpetual
     /// @param cashOutAmount The current cash out amount of the perpetual
-    /// @param ratio What's covered divided by what's to cover
+    /// @param ratio What's hedged divided by what's to hedge
     /// @return netCashOutAmount Amount that will be distributed to the HA
-    /// @return feesPaid Amount of fees paid by the HA at perpetual cash out
-    /// @dev This function is called by the `cashOutPerpetualFunction` and by the `forceCashOutPerpetuals`
+    /// @return feesPaid Amount of fees paid by the HA at perpetual closing
+    /// @dev This function is called by the `closePerpetual` and by the `forceClosePerpetuals`
     /// function
-    /// @dev The amount of fees paid by the HA is used to compute the incentive given to HAs cashing out perpetuals
+    /// @dev The amount of fees paid by the HA is used to compute the incentive given to HAs closing perpetuals
     /// when too much is covered
     function _getNetCashOutAmount(
         uint256 cashOutAmount,
@@ -205,26 +207,26 @@ contract PerpetualManagerInternal is PerpetualManagerStorage {
     /// @dev It adds to the reward per token: the time elapsed since the `rewardPerTokenStored`
     /// was last updated multiplied by the `rewardRate` divided by the number of tokens
     /// @dev Specific attention should be placed on the base here: `rewardRate` is in the base of the reward token
-    /// (that is `BASE_TOKENS`), and `totalCoveredAmount` is in `BASE_TOKENS` here: as this function concerns an amount of reward
+    /// and `totalHedgeAmount` is in `BASE_TOKENS` here: as this function concerns an amount of reward
     /// tokens, the output of this function should be in the base of the reward token too
     function _rewardPerToken() internal view returns (uint256) {
-        if (totalCoveredAmount == 0) {
+        if (totalHedgeAmount == 0) {
             return rewardPerTokenStored;
         }
         return
             rewardPerTokenStored +
             ((_lastTimeRewardApplicable() - lastUpdateTime) * rewardRate * BASE_TOKENS) /
-            totalCoveredAmount;
+            totalHedgeAmount;
     }
 
     /// @notice Allows a perpetual owner to withdraw rewards
     /// @param perpetualID ID of the perpetual which accumulated tokens
-    /// @param coverage Perpetual commit amount times the entry rate
+    /// @param hedge Perpetual commit amount times the entry rate
     /// @dev Internal version of the `getReward` function
-    /// @dev In case where an approved address calls to cash out a vault, rewards are still going to get distributed
+    /// @dev In case where an approved address calls to close a perpetual, rewards are still going to get distributed
     /// to the owner of the perpetual, and not necessarily to the address getting the proceeds of the perpetual
-    function _getReward(uint256 perpetualID, uint256 coverage) internal {
-        _updateReward(perpetualID, coverage);
+    function _getReward(uint256 perpetualID, uint256 hedge) internal {
+        _updateReward(perpetualID, hedge);
         uint256 reward = rewards[perpetualID];
         if (reward > 0) {
             rewards[perpetualID] = 0;
@@ -242,15 +244,15 @@ contract PerpetualManagerInternal is PerpetualManagerStorage {
 
     /// @notice Allows to check the amount of gov tokens earned by a perpetual
     /// @param perpetualID ID of the perpetual which accumulated tokens
-    /// @param coverage Perpetual commit amount times the entry rate
+    /// @param hedge Perpetual commit amount times the entry rate
     /// @return Amount of gov tokens earned by the perpetual
     /// @dev A specific attention should be paid to have the base here: we consider that each HA stakes an amount
-    /// equal to `committedAmount * entryRate / _collatBase`, here as the `coverage` corresponds to `committedAmount * entryRate`,
+    /// equal to `committedAmount * entryRate / _collatBase`, here as the `hedge` corresponds to `committedAmount * entryRate`,
     /// we just need to divide by `_collatBase`
     /// @dev HAs earn reward tokens which are in base `BASE_TOKENS`
-    function _earned(uint256 perpetualID, uint256 coverage) internal view returns (uint256) {
+    function _earned(uint256 perpetualID, uint256 hedge) internal view returns (uint256) {
         return
-            (coverage * (_rewardPerToken() - perpetualRewardPerTokenPaid[perpetualID])) /
+            (hedge * (_rewardPerToken() - perpetualRewardPerTokenPaid[perpetualID])) /
             BASE_TOKENS /
             _collatBase +
             rewards[perpetualID];
@@ -258,15 +260,15 @@ contract PerpetualManagerInternal is PerpetualManagerStorage {
 
     /// @notice Updates the amount of gov tokens earned by a perpetual
     /// @param perpetualID of the perpetual which earns tokens
-    /// @param coverage Perpetual commit amount times the entry rate
+    /// @param hedge Perpetual commit amount times the entry rate
     /// @dev When this function is called in the code, it has already been checked that the `perpetualID`
     /// exists
-    function _updateReward(uint256 perpetualID, uint256 coverage) internal {
+    function _updateReward(uint256 perpetualID, uint256 hedge) internal {
         rewardPerTokenStored = _rewardPerToken();
         lastUpdateTime = _lastTimeRewardApplicable();
         // No need to check if the `perpetualID` exists here, it has already been checked
         // in the code before when this internal function is called
-        rewards[perpetualID] = _earned(perpetualID, coverage);
+        rewards[perpetualID] = _earned(perpetualID, hedge);
         perpetualRewardPerTokenPaid[perpetualID] = rewardPerTokenStored;
     }
 

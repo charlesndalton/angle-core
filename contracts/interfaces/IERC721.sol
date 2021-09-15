@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GNU GPLv3
 
-pragma solidity ^0.8.2;
+pragma solidity ^0.8.7;
 
 import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 
@@ -35,4 +35,12 @@ interface IERC721 is IERC165 {
         uint256 tokenId,
         bytes calldata data
     ) external;
+}
+
+interface IERC721Metadata is IERC721 {
+    function name() external view returns (string memory);
+
+    function symbol() external view returns (string memory);
+
+    function tokenURI(uint256 tokenId) external view returns (string memory);
 }

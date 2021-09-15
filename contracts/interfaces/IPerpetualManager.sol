@@ -1,26 +1,28 @@
 // SPDX-License-Identifier: GNU GPLv3
 
-pragma solidity ^0.8.2;
+pragma solidity ^0.8.7;
 
 import "./IERC721.sol";
 import "./IFeeManager.sol";
 import "./IOracle.sol";
+import "./IAccessControl.sol";
 
 /// @title Interface of the contract managing perpetuals
 /// @author Angle Core Team
 /// @dev Front interface, meaning only user-facing functions
-interface IPerpetualManagerFront is IERC721 {
-    function createPerpetual(
+interface IPerpetualManagerFront is IERC721Metadata {
+    function openPerpetual(
         address owner,
         uint256 amountBrought,
         uint256 amountCommitted,
-        uint256 maxOracleRate
+        uint256 maxOracleRate,
+        uint256 minNetMargin
     ) external returns (uint256 perpetualID);
 
-    function cashOutPerpetual(
+    function closePerpetual(
         uint256 perpetualID,
         address to,
-        uint256 minOracleRate
+        uint256 minCashOutAmount
     ) external;
 
     function addToPerpetual(uint256 perpetualID, uint256 amount) external;
@@ -33,7 +35,7 @@ interface IPerpetualManagerFront is IERC721 {
 
     function liquidatePerpetuals(uint256[] memory perpetualIDs) external;
 
-    function forceCashOutPerpetuals(uint256[] memory perpetualIDs) external;
+    function forceClosePerpetuals(uint256[] memory perpetualIDs) external;
 
     // ========================= External View Functions =============================
 
@@ -52,10 +54,29 @@ interface IPerpetualManagerFunctions is IAccessControl {
     function deployCollateral(
         address[] memory governorList,
         address guardian,
-        IFeeManager feeManager
+        IFeeManager feeManager,
+        IOracle oracle_
     ) external;
 
     function setFeeManager(IFeeManager feeManager_) external;
+
+    function setHAFees(
+        uint64[] memory _xHAFees,
+        uint64[] memory _yHAFees,
+        uint8 deposit
+    ) external;
+
+    function setTargetAndLimitHAHedge(uint64 _targetHAHedge, uint64 _limitHAHedge) external;
+
+    function setKeeperFeesLiquidationRatio(uint64 _keeperFeesLiquidationRatio) external;
+
+    function setKeeperFeesCap(uint256 _keeperFeesLiquidationCap, uint256 _keeperFeesClosingCap) external;
+
+    function setKeeperFeesClosing(uint64[] memory _xKeeperFeesClosing, uint64[] memory _yKeeperFeesClosing) external;
+
+    function setLockTime(uint64 _lockTime) external;
+
+    function setBoundsPerpetual(uint64 _maxLeverage, uint64 _maintenanceMargin) external;
 
     function pause() external;
 
@@ -78,7 +99,7 @@ interface IPerpetualManager is IPerpetualManagerFunctions {
 
     function oracle() external view returns (address);
 
-    function targetHACoverage() external view returns (uint64);
+    function targetHAHedge() external view returns (uint64);
 
-    function totalCoveredAmount() external view returns (uint256);
+    function totalHedgeAmount() external view returns (uint256);
 }

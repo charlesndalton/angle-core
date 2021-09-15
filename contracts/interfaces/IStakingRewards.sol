@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GNU GPLv3
 
-pragma solidity ^0.8.2;
+pragma solidity ^0.8.7;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
@@ -16,12 +16,12 @@ interface IStakingRewardsFunctions {
         uint256 tokenAmount
     ) external;
 
-    function setNewRewardsDistributor(address newRewardsDistributor) external;
+    function setNewRewardsDistribution(address newRewardsDistribution) external;
 }
 
 /// @title IStakingRewards
 /// @author Angle Core Team
-/// @notice Previous interace with additionnal getters for public variables
+/// @notice Previous interface with additionnal getters for public variables
 interface IStakingRewards is IStakingRewardsFunctions {
     function rewardToken() external view returns (IERC20);
 }

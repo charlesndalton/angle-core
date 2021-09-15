@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GNU GPLv3
 
-pragma solidity ^0.8.2;
+pragma solidity ^0.8.7;
 
 import "./FeeManagerStorage.sol";
 
@@ -8,9 +8,10 @@ import "./FeeManagerStorage.sol";
 /// @author Angle Core Team
 /// @dev This contract interacts with fee parameters for a given stablecoin/collateral pair
 /// @dev `FeeManager` contains all the functions that keepers can call to update parameters
-/// (most often fee parameters) in the `StableMaster` and `PerpetualManager` contracts
+/// in the `StableMaster` and `PerpetualManager` contracts
 /// @dev These parameters need to be updated by keepers because they depend on variables, like
-/// the collateral ratio, that are too expensive to compute each time
+/// the collateral ratio, that are too expensive to compute each time transactions that would need
+/// it occur
 contract FeeManager is FeeManagerStorage, IFeeManagerFunctions, AccessControl, Initializable {
     /// @notice Role for `PoolManager` only
     bytes32 public constant POOLMANAGER_ROLE = keccak256("POOLMANAGER_ROLE");
@@ -19,15 +20,12 @@ contract FeeManager is FeeManagerStorage, IFeeManagerFunctions, AccessControl, I
 
     /// @notice Deploys the `FeeManager` contract for a pair stablecoin/collateral
     /// @param _poolManager `PoolManager` contract handling the collateral
-    /// @param _perpetualManager `PerpetualManager` contract handling the perpetuals of the pool
     /// @dev The `_poolManager` address is used to grant the correct role. It does not need to be stored by the
     /// contract
     /// @dev There is no need to do a zero address check on the `_poolManager` as if the zero address is passed
     /// the function will revert when trying to fetch the `StableMaster`
-    constructor(IPoolManager _poolManager, IPerpetualManager _perpetualManager) {
-        require(address(_perpetualManager) != address(0), "zero address");
+    constructor(IPoolManager _poolManager) {
         stableMaster = IStableMaster(_poolManager.stableMaster());
-        perpetualManager = _perpetualManager;
         // Once a `FeeManager` contract has been initialized with a `PoolManager` contract, this
         // reference cannot be modified
         _setupRole(POOLMANAGER_ROLE, address(_poolManager));
@@ -36,21 +34,23 @@ contract FeeManager is FeeManagerStorage, IFeeManagerFunctions, AccessControl, I
         _setRoleAdmin(GUARDIAN_ROLE, POOLMANAGER_ROLE);
     }
 
-    /// @notice Initializes the governor and guardian roles of the contract
+    /// @notice Initializes the governor and guardian roles of the contract as well as the reference to
+    /// the `perpetualManager` contract
     /// @param governorList List of the governor addresses of the protocol
     /// @param guardian Guardian address of the protocol
+    /// @param _perpetualManager `PerpetualManager` contract handling the perpetuals of the pool
     /// @dev `GUARDIAN_ROLE` can then directly be granted or revoked by the corresponding `PoolManager`
     /// As `POOLMANAGER_ROLE` is admin of `GUARDIAN_ROLE`, it corresponds to the intended behaviour of roles
-    function deployCollateral(address[] memory governorList, address guardian)
-        external
-        override
-        onlyRole(POOLMANAGER_ROLE)
-        initializer
-    {
+    function deployCollateral(
+        address[] memory governorList,
+        address guardian,
+        address _perpetualManager
+    ) external override onlyRole(POOLMANAGER_ROLE) initializer {
         for (uint256 i = 0; i < governorList.length; i++) {
             _grantRole(GUARDIAN_ROLE, governorList[i]);
         }
         _grantRole(GUARDIAN_ROLE, guardian);
+        perpetualManager = IPerpetualManager(_perpetualManager);
     }
 
     // ============================ `StableMaster` =================================
@@ -59,15 +59,15 @@ contract FeeManager is FeeManagerStorage, IFeeManagerFunctions, AccessControl, I
     /// the `StableMaster` contract
     /// @dev This function updates:
     /// 	-	`bonusMalusMint`: part of the fee induced by a user minting depending on the collateral ratio
-    ///                   In normal times, no fees are taken for that, and so this fee should be equal to BASE_PARAMS
+    ///                   In normal times, no fees are taken for that, and so this fee should be equal to `BASE_PARAMS`
     ///		-	`bonusMalusBurn`: part of the fee induced by a user burning depending on the collateral ratio
     ///		-	Slippage: what's given to SLPs compared with their claim when they exit
     ///		-	SlippageFee: that is the portion of fees that is put aside because the protocol
     ///         is not well collateralized
     /// @dev `bonusMalusMint` and `bonusMalusBurn` allow governance to add penalties or bonuses for users minting
     /// and burning in some situations of collateral ratio. These parameters are multiplied to the fee amount depending
-    /// on coverage by Hedging Agents to get the exact fee induced to the users
-    function updateUsersSLP() external {
+    /// on the hedge ratio by Hedging Agents to get the exact fee induced to the users
+    function updateUsersSLP() external override {
         // Computing the collateral ratio, expressed in `BASE_PARAMS`
         uint256 collatRatio = stableMaster.getCollateralRatio();
         // Computing the fees based on this collateral ratio
@@ -84,23 +84,23 @@ contract FeeManager is FeeManagerStorage, IFeeManagerFunctions, AccessControl, I
 
     /// @notice Updates HA fees associated to the pair stablecoin/collateral in the `PerpetualManager` contract
     /// @dev This function updates:
-    ///     - The part of the fee taken from HAs when they create a perpetual or add collateral in it. This allows
+    ///     - The part of the fee taken from HAs when they open a perpetual or add collateral in it. This allows
     ///        governance to add penalties or bonuses in some occasions to HAs opening their perpetuals
     ///     - The part of the fee taken from the HA when they withdraw collateral from a perpetual. This allows
     ///       governance to add penalty or bonuses in some occasions to HAs closing their perpetuals
     /// @dev Penalties or bonuses for HAs should almost never be used
     /// @dev In the `PerpetualManager` contract, these parameters are multiplied to the fee amount depending on the HA
-    /// coverage to get the exact fee amount for HAs
+    /// hedge ratio to get the exact fee amount for HAs
     /// @dev For the moment, these parameters do not depend on the collateral ratio, and they are just an extra
     /// element that governance can play on to correct fees taken for HAs
-    function updateHA() external {
+    function updateHA() external override {
         emit HaFeesUpdated(haFeeDeposit, haFeeWithdraw);
         perpetualManager.setFeeKeeper(haFeeDeposit, haFeeWithdraw);
     }
 
     // ============================= Governance ====================================
 
-    /// @notice Sets the x(ie thresholds of collateral ratio) array / y(ie value of fees at threshold)-array
+    /// @notice Sets the x (i.e. thresholds of collateral ratio) array / y (i.e. value of fees at threshold)-array
     /// for users minting, burning, for SLPs withdrawal slippage or for the slippage fee when updating
     /// the exchange rate between sanTokens and collateral
     /// @param xArray New collateral ratio thresholds (in ascending order)
@@ -114,7 +114,7 @@ contract FeeManager is FeeManagerStorage, IFeeManagerFunctions, AccessControl, I
         uint256[] memory xArray,
         uint64[] memory yArray,
         uint8 typeChange
-    ) external onlyRole(GUARDIAN_ROLE) {
+    ) external override onlyRole(GUARDIAN_ROLE) {
         require(xArray.length == yArray.length && yArray.length > 0, "incorrect array length");
         for (uint256 i = 0; i <= yArray.length - 1; i++) {
             if (i > 0) {
@@ -146,7 +146,7 @@ contract FeeManager is FeeManagerStorage, IFeeManagerFunctions, AccessControl, I
     /// protocol
     /// @param _haFeeDeposit New parameter to modify deposit fee for HAs
     /// @param _haFeeWithdraw New parameter to modify withdraw fee for HAs
-    function setHAFees(uint64 _haFeeDeposit, uint64 _haFeeWithdraw) external onlyRole(GUARDIAN_ROLE) {
+    function setHAFees(uint64 _haFeeDeposit, uint64 _haFeeWithdraw) external override onlyRole(GUARDIAN_ROLE) {
         haFeeDeposit = _haFeeDeposit;
         haFeeWithdraw = _haFeeWithdraw;
     }
@@ -199,14 +199,14 @@ contract FeeManager is FeeManagerStorage, IFeeManagerFunctions, AccessControl, I
         } else {
             uint256 lower;
             uint256 upper = xArray.length - 1;
-            uint256 mid = (upper - lower) / 2;
+            uint256 mid;
             while (upper - lower > 1) {
+                mid = lower + (upper - lower) / 2;
                 if (xArray[mid] <= x) {
                     lower = mid;
                 } else {
                     upper = mid;
                 }
-                mid = lower + (upper - lower) / 2;
             }
             uint256 yCasted;
             if (yArray[upper] > yArray[lower]) {

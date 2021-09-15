@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GNU GPLv3
 
-pragma solidity ^0.8.2;
+pragma solidity ^0.8.7;
 
 import "@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol";
 
@@ -22,8 +22,6 @@ interface IAgToken is IERC20Upgradeable {
     function burnSelf(uint256 amount, address burner) external;
 
     // ========================= External function =================================
-
-    function burnFromNoRedeem(address account, uint256 amount) external;
 
     function stableMaster() external view returns (address);
 }

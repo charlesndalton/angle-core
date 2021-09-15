@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GNU GPLv3
 
-pragma solidity ^0.8.2;
+pragma solidity ^0.8.7;
 
 import "./IFeeManager.sol";
 import "./IPerpetualManager.sol";
+import "./IOracle.sol";
 
 // Struct for the parameters associated to a strategy interacting with a collateral `PoolManager`
 // contract
@@ -29,7 +30,8 @@ interface IPoolManagerFunctions {
         address[] memory governorList,
         address guardian,
         IPerpetualManager _perpetualManager,
-        IFeeManager feeManager
+        IFeeManager feeManager,
+        IOracle oracle
     ) external;
 
     // ============================ Yield Farming ==================================
@@ -65,7 +67,7 @@ interface IPoolManagerFunctions {
 
 /// @title IPoolManager
 /// @author Angle Core Team
-/// @notice Previous interace with additionnal getters for public variables and mappings
+/// @notice Previous interface with additionnal getters for public variables and mappings
 /// @dev Used in other contracts of the protocol
 interface IPoolManager is IPoolManagerFunctions {
     function stableMaster() external view returns (address);

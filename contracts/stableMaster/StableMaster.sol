@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GNU GPLv3
 
-pragma solidity ^0.8.2;
+pragma solidity ^0.8.7;
 
 import "./StableMasterInternal.sol";
 
@@ -22,7 +22,7 @@ contract StableMaster is StableMasterInternal, IStableMasterFunctions, AccessCon
     bytes32 public constant STABLE = keccak256("STABLE");
     bytes32 public constant SLP = keccak256("SLP");
 
-    // ============================ CONSTRUCTORS AND DEPLOYERS =====================
+    // ============================ DEPLOYER =======================================
 
     /// @notice Creates the access control logic for the governor and guardian addresses
     /// @param governorList List of the governor addresses of the protocol
@@ -73,10 +73,17 @@ contract StableMaster is StableMasterInternal, IStableMasterFunctions, AccessCon
         _contractMapCheck(col);
         uint256 sanMint = col.sanToken.totalSupply();
         if (sanMint != 0) {
-            // Updating the `sanRate` by taking into account a loss
-            // All the loss is distributed through the `sanRate`
-            if (col.sanRate * sanMint > loss * BASE_TOKENS) {
-                col.sanRate = col.sanRate - (loss * BASE_TOKENS) / sanMint;
+            // Updating the `sanRate` and the `lockedInterests` by taking into account a loss
+            if (col.sanRate * sanMint + col.slpData.lockedInterests * BASE_TOKENS > loss * BASE_TOKENS) {
+                // The loss is first taken from the `lockedInterests`
+                uint256 withdrawFromLoss = col.slpData.lockedInterests;
+
+                if (withdrawFromLoss >= loss) {
+                    withdrawFromLoss = loss;
+                }
+
+                col.slpData.lockedInterests -= withdrawFromLoss;
+                col.sanRate -= ((loss - withdrawFromLoss) * BASE_TOKENS) / sanMint;
             } else {
                 // Normally it should be set to 0, but this would imply that no SLP can enter afterwards
                 // we therefore set it to 1 (equivalent to 10**(-18))
@@ -109,20 +116,20 @@ contract StableMaster is StableMasterInternal, IStableMasterFunctions, AccessCon
     }
 
     /// @notice Sets the proportion of `stocksUsers` available for perpetuals
-    /// @param _targetHACoverage New proportion of mint/burn fees going to SLPs
+    /// @param _targetHAHedge New value of the hedge ratio that the protocol wants to arrive to
     /// @dev Can only be called by the `PerpetualManager`
-    function setTargetHACoverage(uint64 _targetHACoverage) external override {
+    function setTargetHAHedge(uint64 _targetHAHedge) external override {
         // Data about the `PerpetualManager` calling the function is fetched using the `contractMap`
         IPoolManager poolManager = _contractMap[msg.sender];
         Collateral storage col = collateralMap[poolManager];
         _contractMapCheck(col);
-        col.feeData.targetHACoverage = _targetHACoverage;
+        col.feeData.targetHAHedge = _targetHAHedge;
         // No need to issue an event here, one has already been issued by the corresponding `PerpetualManager`
     }
 
     // ============================ VIEW FUNCTIONS =================================
 
-    /// @notice Transmits to the `PerpetualManager` the max amount HA can cover
+    /// @notice Transmits to the `PerpetualManager` the max amount of collateral (in stablecoin value) HAs can hedge
     /// @return _stocksUsers All stablecoins currently assigned to the pool of the caller
     /// @dev This function will not return something relevant if it is not called by a `PerpetualManager`
     function getStocksUsers() external view override returns (uint256 _stocksUsers) {
@@ -151,8 +158,8 @@ contract StableMaster is StableMasterInternal, IStableMasterFunctions, AccessCon
     /// @notice Updates all the fees not depending on personal agents inputs via a keeper calling the corresponding
     /// function in the `FeeManager` contract
     /// @param _bonusMalusMint New corrector of user mint fees for this collateral. These fees will correct
-    /// the mint fees from users that just depend on the coverage curve by HAs by introducing other dependencies.
-    /// In normal times they will be equal to `BASE_PARAMS` meaning fees will just depend on coverage
+    /// the mint fees from users that just depend on the hedge curve by HAs by introducing other dependencies.
+    /// In normal times they will be equal to `BASE_PARAMS` meaning fees will just depend on the hedge ratio
     /// @param _bonusMalusBurn New corrector of user burn fees, depending on collateral ratio
     /// @param _slippage New global slippage (the SLP fees from withdrawing) factor
     /// @param _slippageFee New global slippage fee (the non distributed accumulated fees) factor
@@ -172,6 +179,23 @@ contract StableMaster is StableMasterInternal, IStableMasterFunctions, AccessCon
         col.slpData.slippage = _slippage;
         col.slpData.slippageFee = _slippageFee;
         // An event is already emitted in the `FeeManager` contract
+    }
+
+    // ============================== AgToken ======================================
+
+    /// @notice Allows the `agToken` contract to update the `stocksUsers` for a given collateral after a burn
+    /// with no redeem
+    /// @param amount Amount by which `stocksUsers` should decrease
+    /// @param poolManager Reference to `PoolManager` for which `stocksUsers` needs to be updated
+    /// @dev This function can be called by the `agToken` contract after a burn of agTokens for which no collateral has been
+    /// redeemed
+    function updateStocksUsers(uint256 amount, address poolManager) external override {
+        require(msg.sender == address(agToken), "invalid call");
+        Collateral storage col = collateralMap[IPoolManager(poolManager)];
+        _contractMapCheck(col);
+        require(col.stocksUsers >= amount, "incompatible value");
+        col.stocksUsers -= amount;
+        emit StocksUsersUpdated(address(col.token), col.stocksUsers);
     }
 
     // ================================= GOVERNANCE ================================
@@ -262,8 +286,6 @@ contract StableMaster is StableMasterInternal, IStableMasterFunctions, AccessCon
         IOracle oracle,
         ISanToken sanToken
     ) external onlyRole(GOVERNOR_ROLE) {
-        // Performing zero checks
-        require(address(oracle) != address(0), "zero address");
         // If the `sanToken`, `poolManager`, `perpetualManager` and `feeManager` were zero
         // addresses, the following require would fail
         // The only elements that are checked here are those that are defined in the constructors/initializers
@@ -273,23 +295,28 @@ contract StableMaster is StableMasterInternal, IStableMasterFunctions, AccessCon
                 sanToken.poolManager() == address(poolManager) &&
                 poolManager.stableMaster() == address(this) &&
                 perpetualManager.poolManager() == address(poolManager) &&
-                perpetualManager.oracle() == address(oracle) &&
-                feeManager.stableMaster() == address(this) &&
-                feeManager.perpetualManager() == address(perpetualManager),
+                // If the `feeManager` is not initialized with the correct `poolManager` then this function
+                // will revert when `poolManager.deployCollateral` will be executed
+                feeManager.stableMaster() == address(this),
             "invalid reference"
         );
-
+        // Checking if the base of the tokens and of the oracle are not similar with one another
+        address token = poolManager.token();
+        uint256 collatBase = 10**(IERC20Metadata(token).decimals());
+        // If the address of the oracle was the zero address, the following would revert
+        require(oracle.inBase() == collatBase, "invalid oracle base");
         // Checking if the collateral has not already been deployed
         Collateral storage col = collateralMap[poolManager];
         require(address(col.token) == address(0), "deployed");
+
         // Creating the correct references
-        col.sanRate = BASE_TOKENS;
-        col.token = IERC20(poolManager.token());
-        col.collatBase = 10**(IERC20Metadata(address(col.token)).decimals());
+        col.token = IERC20(token);
         col.sanToken = sanToken;
         col.perpetualManager = perpetualManager;
         col.oracle = oracle;
-        col.stocksUsers = 0;
+        // Initializing with the correct values
+        col.sanRate = BASE_TOKENS;
+        col.collatBase = collatBase;
 
         // Adding the correct references in the `contractMap` we use in order not to have to pass addresses when
         // calling the `StableMaster` from the `PerpetualManager` contract, or the `FeeManager` contract
@@ -298,18 +325,19 @@ contract StableMaster is StableMasterInternal, IStableMasterFunctions, AccessCon
         _contractMap[address(feeManager)] = poolManager;
         _managerList.push(poolManager);
 
+        // Pausing agents at deployment to leave governance time to set parameters
+        // The `PerpetualManager` contract is automatically paused after being initialized, so HAs will not be able to
+        // interact with the protocol
+        _pause(keccak256(abi.encodePacked(SLP, address(poolManager))));
+        _pause(keccak256(abi.encodePacked(STABLE, address(poolManager))));
+
         // Fetching the governor list and the guardian to initialize the `poolManager` correctly
         address[] memory governorList = _core.governorList();
         address guardian = _core.guardian();
 
-        // Propagating the deployment
-        poolManager.deployCollateral(governorList, guardian, perpetualManager, feeManager);
+        // Propagating the deployment and passing references to the corresponding contracts
+        poolManager.deployCollateral(governorList, guardian, perpetualManager, feeManager, oracle);
         emit CollateralDeployed(address(poolManager), address(perpetualManager), address(sanToken), address(oracle));
-
-        // Pausing agents at deployment to leave governance time to set parameters
-        perpetualManager.pause();
-        _pause(keccak256(abi.encodePacked(SLP, address(poolManager))));
-        _pause(keccak256(abi.encodePacked(STABLE, address(poolManager))));
     }
 
     /// @notice Removes a collateral from the list of accepted collateral types and pauses all actions associated
@@ -329,6 +357,7 @@ contract StableMaster is StableMasterInternal, IStableMasterFunctions, AccessCon
         // the `poolManager` from the list
         uint256 indexMet;
         uint256 managerListLength = _managerList.length;
+        require(managerListLength >= 1, "incorrect poolManager");
         for (uint256 i = 0; i < managerListLength - 1; i++) {
             if (_managerList[i] == poolManager) {
                 indexMet = 1;
@@ -336,7 +365,6 @@ contract StableMaster is StableMasterInternal, IStableMasterFunctions, AccessCon
                 break;
             }
         }
-
         require(indexMet == 1 || _managerList[managerListLength - 1] == poolManager, "incorrect poolManager");
         _managerList.pop();
         Collateral memory col = collateralMap[poolManager];
@@ -350,7 +378,7 @@ contract StableMaster is StableMasterInternal, IStableMasterFunctions, AccessCon
 
         // Pausing entry (and exits for HAs)
         col.perpetualManager.pause();
-        // No need to pause `SLP` and `STABLE_HOLDERS` as deleting the entry associated to the manager
+        // No need to pause `SLP` and `STABLE_HOLDERS` as deleting the entry associated to the `poolManager`
         // in the `collateralMap` will make everything revert
 
         // Transferring the whole balance to global settlement
@@ -361,6 +389,7 @@ contract StableMaster is StableMasterInternal, IStableMasterFunctions, AccessCon
         uint256 oracleValue = col.oracle.readLower();
         // Notifying the global settlement contract with the properties of the contract to settle
         // In case of global shutdown, there would be one settlement contract per collateral type
+        // Not using the `lockedInterests` to update the value of the sanRate
         settlementContract.triggerSettlement(oracleValue, col.sanRate, col.stocksUsers);
     }
 
@@ -375,7 +404,7 @@ contract StableMaster is StableMasterInternal, IStableMasterFunctions, AccessCon
     /// their stablecoins
     /// @dev If agent is `SLP`, it is going to be impossible for SLPs to deposit collateral and receive
     /// sanTokens in exchange, or to withdraw collateral from their sanTokens
-    function pause(bytes32 agent, IPoolManager poolManager) external onlyRole(GUARDIAN_ROLE) {
+    function pause(bytes32 agent, IPoolManager poolManager) external override onlyRole(GUARDIAN_ROLE) {
         Collateral storage col = collateralMap[poolManager];
         // Checking for the `poolManager`
         _contractMapCheck(col);
@@ -386,7 +415,7 @@ contract StableMaster is StableMasterInternal, IStableMasterFunctions, AccessCon
     /// @param agent Agent (`SLP` or `STABLE`) to unpause the action of
     /// @param poolManager Reference to the associated `PoolManager`
     /// @dev Before calling this function, the agent should have been paused for this collateral
-    function unpause(bytes32 agent, IPoolManager poolManager) external onlyRole(GUARDIAN_ROLE) {
+    function unpause(bytes32 agent, IPoolManager poolManager) external override onlyRole(GUARDIAN_ROLE) {
         Collateral storage col = collateralMap[poolManager];
         // Checking for the `poolManager`
         _contractMapCheck(col);
@@ -399,7 +428,7 @@ contract StableMaster is StableMasterInternal, IStableMasterFunctions, AccessCon
     /// @param poolManagerDown Reference to `PoolManager` for which `stocksUsers` needs to decrease
     /// @dev This function can be called in case where the reserves of the protocol for each collateral do not exactly
     /// match what is stored in the `stocksUsers` because of increases or decreases in collateral prices at times
-    /// in which the protocol was not fully covered by HAs
+    /// in which the protocol was not fully hedged by HAs
     /// @dev With this function, governance can allow/prevent more HAs coming in a pool while preventing/allowing HAs
     /// from other pools because the accounting variable of `stocksUsers` does not really match
     function rebalanceStocksUsers(
@@ -434,20 +463,24 @@ contract StableMaster is StableMasterInternal, IStableMasterFunctions, AccessCon
         // Checking for the `poolManager`
         _contractMapCheck(col);
         require(col.oracle != _oracle, "identical oracle");
+        // The `inBase` of the new oracle should be the same as the `_collatBase` stored for this collateral
+        require(col.collatBase == _oracle.inBase(), "incorrect oracle base");
         col.oracle = _oracle;
         emit OracleUpdated(address(poolManager), address(_oracle));
         col.perpetualManager.setOracle(_oracle);
     }
 
-    /// @notice Changes the parameter to cap the number of stablecoins you can issue using one
-    /// collateral type
-    /// @param _capOnStableMinted New value
+    /// @notice Changes the parameters to cap the number of stablecoins you can issue using one
+    /// collateral type and the maximum interests you can distribute to SLPs in a sanRate update
+    /// in a block
+    /// @param _capOnStableMinted New value of the cap
+    /// @param _maxInterestsDistributed Maximum amount of interests distributed to SLPs in a block
     /// @param poolManager Reference to the `PoolManager` contract associated to the collateral
     function setCapOnStableAndMaxInterests(
         uint256 _capOnStableMinted,
         uint256 _maxInterestsDistributed,
         IPoolManager poolManager
-    ) external onlyRole(GUARDIAN_ROLE) {
+    ) external override onlyRole(GUARDIAN_ROLE) {
         Collateral storage col = collateralMap[poolManager];
         // Checking for the `poolManager`
         _contractMapCheck(col);
@@ -490,7 +523,7 @@ contract StableMaster is StableMasterInternal, IStableMasterFunctions, AccessCon
         uint64 _feesForSLPs,
         uint64 _interestsForSLPs,
         IPoolManager poolManager
-    ) external onlyRole(GUARDIAN_ROLE) onlyCompatibleFees(_feesForSLPs) onlyCompatibleFees(_interestsForSLPs) {
+    ) external override onlyRole(GUARDIAN_ROLE) onlyCompatibleFees(_feesForSLPs) onlyCompatibleFees(_interestsForSLPs) {
         Collateral storage col = collateralMap[poolManager];
         _contractMapCheck(col);
         col.slpData.feesForSLPs = _feesForSLPs;
@@ -498,10 +531,10 @@ contract StableMaster is StableMasterInternal, IStableMasterFunctions, AccessCon
         emit SLPsIncentivesUpdated(address(poolManager), _feesForSLPs, _interestsForSLPs);
     }
 
-    /// @notice Sets the x array (ie ratios between amount covered by HAs and amount to cover)
+    /// @notice Sets the x array (ie ratios between amount hedged by HAs and amount to hedge)
     /// and the y array (ie values of fees at thresholds) used to compute mint and burn fees for users
     /// @param poolManager Reference to the `PoolManager` handling the collateral
-    /// @param _xFee Thresholds of coverage ratios
+    /// @param _xFee Thresholds of hedge ratios
     /// @param _yFee Values of the fees at thresholds
     /// @param _mint Whether mint fees or burn fees should be updated
     /// @dev The evolution of the fees between two thresholds is linear
@@ -509,7 +542,7 @@ contract StableMaster is StableMasterInternal, IStableMasterFunctions, AccessCon
     /// @dev The values of `_xFee` should be in ascending order
     /// @dev For mint fees, values in the y-array below should normally be decreasing: the higher the `x` the cheaper
     /// it should be for stable seekers to come in as a high `x` corresponds to a high demand for volatility and hence
-    /// to a situation where all the collateral can be covered
+    /// to a situation where all the collateral can be hedged
     /// @dev For burn fees, values in the array below should normally be decreasing: the lower the `x` the cheaper it should
     /// be for stable seekers to go out, as a low `x` corresponds to low demand for volatility and hence
     /// to a situation where the protocol has a hard time covering its collateral
@@ -518,7 +551,7 @@ contract StableMaster is StableMasterInternal, IStableMasterFunctions, AccessCon
         uint64[] memory _xFee,
         uint64[] memory _yFee,
         uint8 _mint
-    ) external onlyRole(GUARDIAN_ROLE) onlyCompatibleInputArrays(_xFee, _yFee) {
+    ) external override onlyRole(GUARDIAN_ROLE) onlyCompatibleInputArrays(_xFee, _yFee) {
         Collateral storage col = collateralMap[poolManager];
         _contractMapCheck(col);
         if (_mint > 0) {

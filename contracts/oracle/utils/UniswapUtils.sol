@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GNU GPLv3
 
-pragma solidity ^0.8.2;
+pragma solidity ^0.8.7;
 
 import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Pool.sol";
 

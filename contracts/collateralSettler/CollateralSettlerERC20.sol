@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GNU GPLv3
 
-pragma solidity ^0.8.2;
+pragma solidity ^0.8.7;
 
 import "./CollateralSettlerERC20Events.sol";
 
@@ -13,7 +13,7 @@ contract CollateralSettlerERC20 is CollateralSettlerERC20Events, ICollateralSett
 
     /// @notice Role for governors only
     bytes32 public constant GOVERNOR_ROLE = keccak256("GOVERNOR_ROLE");
-    /// @notice Role for `StableMaster` only
+    /// @notice Role for `StableMaster`. This role is also given to the governor addresses
     bytes32 public constant STABLEMASTER_ROLE = keccak256("STABLEMASTER_ROLE");
     /// @notice Base that is used to compute ratios and floating numbers
     uint256 public constant BASE_TOKENS = 10**18;
@@ -66,15 +66,15 @@ contract CollateralSettlerERC20 is CollateralSettlerERC20Events, ICollateralSett
     /// @notice Value of the oracle at settlement trigger time
     /// It is the one that is used to compute HAs claims
     /// Note that the oracle value for HAs is going to be slightly different than that for users
-    /// For HAs, it is as if at the time of trigger of collateral settlement, their positions were forced cash out
+    /// For HAs, it is as if at the time of trigger of collateral settlement, their positions were forced closed
     /// without needing to pay fees
     uint256 public oracleValueHA;
 
     /// @notice Value of the oracle at the end of the claim period. This is the value that is used to settle users
     /// The reason for using a different value than for HAs is that the real value of the oracle could change
-    /// during the claim time. In case of the revokation of a single collateral, there could be if we used the same value as HAs
+    /// during the claim time. In case of the revokation of a single collateral, there could be, if we used the same value as HAs,
     /// arbitrages among users seeing that the value of the oracle at which they are going to be settled differ
-    /// from the current oracle value. Or in case of multiple collateral being revoked at the same time, users could see
+    /// from the current oracle value. Or in case of multiple collaterals being revoked at the same time, users could see
     /// a bargain in a collateral and all come to redeem one collateral in particular
     uint256 public oracleValueUsers;
 
@@ -227,7 +227,7 @@ contract CollateralSettlerERC20 is CollateralSettlerERC20Events, ICollateralSett
     /// collateral for users
     /// @param _sanRate Value of the `sanRate` at time of settlement to be able to convert an amount of
     /// sanTokens to an amount of collateral
-    /// @param _stocksUsers Maximum number of stablecoins that will be redeemable by users for this collateral
+    /// @param _stocksUsers Maximum amount of stablecoins that will be redeemable by users for this collateral
     /// @dev This function is to be called by the `StableMaster` after governance called `revokeCollateral` or by
     /// governance directly, in which case governance will have to pay attention to pass the right values and to
     /// pause in the concerned `StableMaster` users, HAs and SLPs. In this situation, governance has more freedom
@@ -295,6 +295,8 @@ contract CollateralSettlerERC20 is CollateralSettlerERC20Events, ICollateralSett
     /// @param perpetualID Perpetual owned by the HA
     /// @param amountGovToken Amount of governance sent
     /// @dev The contract automatically recognizes the beneficiary of the perpetual
+    /// @dev If the perpetual of the HA should be liquidated then, this HA will not be able to get
+    /// a claim on the remaining collateral
     function claimHA(uint256 perpetualID, uint256 amountGovToken) external onlyClaimPeriod whenNotPaused {
         require(perpetualManager.isApprovedOrOwner(msg.sender, perpetualID), "not approved");
         // Getting the owner of the perpetual
@@ -304,9 +306,15 @@ contract CollateralSettlerERC20 is CollateralSettlerERC20Events, ICollateralSett
         // A HA cannot claim a given perpetual twice
         haClaimCheck[perpetualID] = 1;
         // Computing the amount of the claim from the perpetual
-        (uint256 amountInC, ) = perpetualManager.getCashOutAmount(perpetualID, oracleValueHA);
-        // Updating the contract's mappings accordingly
-        _treatLPClaim(dest, amountGovToken, amountInC);
+        (uint256 amountInC, uint256 reachMaintenanceMargin) = perpetualManager.getCashOutAmount(
+            perpetualID,
+            oracleValueHA
+        );
+        // If the perpetual is below the maintenance margin, then the claim of the HA is null
+        if (reachMaintenanceMargin != 1 && amountInC > 0) {
+            // Updating the contract's mappings accordingly
+            _treatLPClaim(dest, amountGovToken, amountInC);
+        }
     }
 
     // =============================== SLP Claims ==================================

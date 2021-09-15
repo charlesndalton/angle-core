@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GNU GPLv3
 
-pragma solidity ^0.8.2;
+pragma solidity ^0.8.7;
 
 import "./StakingRewardsEvents.sol";
 
@@ -50,7 +50,7 @@ contract StakingRewards is StakingRewardsEvents, IStakingRewards, ReentrancyGuar
 
     /// @notice Helps to compute the amount earned by someone
     /// Cumulates rewards accumulated for one token since the beginning.
-    /// Stored as a uint so is actually a float times `stakingBase`
+    /// Stored as a uint so it is actually a float times the base of the reward token
     uint256 public rewardPerTokenStored;
 
     /// @notice Stores for each account the `rewardPerToken`: we do the difference
@@ -279,10 +279,10 @@ contract StakingRewards is StakingRewardsEvents, IStakingRewards, ReentrancyGuar
     /// @notice Changes the rewards distributor associated to this contract
     /// @param _rewardsDistribution Address of the new rewards distributor contract
     /// @dev This function was also added by Angle Core Team
-    /// @dev A compatibility check is already performed in the current `RewardsDistributor` implementation
+    /// @dev A compatibility check of the reward token is already performed in the current `RewardsDistributor` implementation
     /// which has right to call this function
-    function setNewRewardsDistributor(address _rewardsDistribution) external override onlyRewardsDistribution {
+    function setNewRewardsDistribution(address _rewardsDistribution) external override onlyRewardsDistribution {
         rewardsDistribution = _rewardsDistribution;
-        emit RewardsDistributorUpdated(_rewardsDistribution);
+        emit RewardsDistributionUpdated(_rewardsDistribution);
     }
 }

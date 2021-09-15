@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GNU GPLv3
 
-pragma solidity ^0.8.2;
+pragma solidity ^0.8.7;
 
 import "./RewardsDistributorEvents.sol";
 
@@ -78,12 +78,15 @@ contract RewardsDistributor is RewardsDistributorEvents, IRewardsDistributor, Ac
 
     // ============================ External Functions =============================
 
-    /// @notice Sends governance token to the staking contract
+    /// @notice Sends reward tokens to the staking contract
     /// @param stakingContract Reference to the staking contract
     /// @dev The way to pause this function is to set `updateFrequency` to infinity,
     /// or to completely delete the contract
     /// @dev A keeper calling this function could be frontran by a miner seeing the potential profit
     /// from calling this function
+    /// @dev This function automatically computes the amount of reward tokens to send to the staking
+    /// contract based on the time elapsed since the last drip, on the amount to distribute and on
+    /// the duration of the distribution
     function drip(IStakingRewards stakingContract) external override returns (uint256) {
         StakingParameters storage stakingParams = stakingContractsMap[stakingContract];
         require(stakingParams.duration > 0, "invalid staking contract");
@@ -145,8 +148,9 @@ contract RewardsDistributor is RewardsDistributorEvents, IRewardsDistributor, Ac
             address(IRewardsDistributor(newRewardsDistributor).rewardToken()) == address(rewardToken),
             "incompatible reward tokens"
         );
+        require(newRewardsDistributor != address(this), "incorrect rewards distributor");
         for (uint256 i = 0; i < stakingContractsList.length; i++) {
-            stakingContractsList[i].setNewRewardsDistributor(newRewardsDistributor);
+            stakingContractsList[i].setNewRewardsDistribution(newRewardsDistributor);
         }
         rewardToken.safeTransfer(newRewardsDistributor, rewardToken.balanceOf(address(this)));
         // The functions `setStakingContract` should then be called for each staking contract in the `newRewardsDistributor`
@@ -162,13 +166,11 @@ contract RewardsDistributor is RewardsDistributorEvents, IRewardsDistributor, Ac
         uint256 indexMet;
         uint256 stakingContractsListLength = stakingContractsList.length;
         require(stakingContractsListLength >= 1, "incorrect staking contract");
-        if (stakingContractsListLength > 1) {
-            for (uint256 i = 0; i < stakingContractsListLength - 1; i++) {
-                if (stakingContractsList[i] == stakingContract) {
-                    indexMet = 1;
-                    stakingContractsList[i] = stakingContractsList[stakingContractsListLength - 1];
-                    break;
-                }
+        for (uint256 i = 0; i < stakingContractsListLength - 1; i++) {
+            if (stakingContractsList[i] == stakingContract) {
+                indexMet = 1;
+                stakingContractsList[i] = stakingContractsList[stakingContractsListLength - 1];
+                break;
             }
         }
         require(
@@ -192,7 +194,7 @@ contract RewardsDistributor is RewardsDistributorEvents, IRewardsDistributor, Ac
     /// @param _amountToDistribute Amount of gov tokens to give to the staking contract across all drips
     /// @dev Called by governance to activate a contract
     /// @dev After setting a new staking contract, everything is as if the contract had already been set for `_updateFrequency`
-    /// meaning that it is possible to drip the staking contract immediately after that
+    /// meaning that it is possible to `drip` the staking contract immediately after that
     function setStakingContract(
         address _stakingContract,
         uint256 _duration,

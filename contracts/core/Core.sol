@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GNU GPLv3
 
-pragma solidity ^0.8.2;
+pragma solidity ^0.8.7;
 
 import "./CoreEvents.sol";
 
@@ -75,11 +75,12 @@ contract Core is CoreEvents, ICore {
 
     /// @notice Changes the `Core` contract of the protocol
     /// @param newCore Address of the new `Core` contract
-    /// @dev To maintain consistency, checks are performed.
+    /// @dev To maintain consistency, checks are performed. The governance of the new `Core`
+    /// contract should be exactly the same of this one
     function setCore(ICore newCore) external onlyGovernor zeroCheck(address(newCore)) {
-        // The governance of the new `Core` contract should be exactly the same of this one
         require(address(this) != address(newCore), "incorrect address");
         require(guardian == newCore.guardian(), "incorrect guardian");
+        // The length of the list is stored as a cache variable to avoid duplicate reads in storage
         uint256 governorListLength = _governorList.length;
         address[] memory _newCoreGovernorList = newCore.governorList();
         require(governorListLength == _newCoreGovernorList.length, "invalid lists length");
@@ -107,8 +108,6 @@ contract Core is CoreEvents, ICore {
     /// @dev The `AgToken` and `StableMaster` contracts should have previously been initialized with correct references
     /// in it, with for the `StableMaster` a reference to the `Core` contract and for the `AgToken` a reference to the
     /// `StableMaster`
-    /// @dev The call to the `deploy` function of the `stableMaster` will revert if the `stableMaster` has not been
-    /// initialized with the correct `core` address
     function deployStableMaster(address agToken) external onlyGovernor zeroCheck(agToken) {
         address stableMaster = IAgToken(agToken).stableMaster();
         // Checking if `stableMaster` has not already been deployed
@@ -136,13 +135,11 @@ contract Core is CoreEvents, ICore {
         // Checking if `stableMaster` is correct and removing the stablecoin from the `stablecoinList`
         require(stablecoinListLength >= 1, "incorrect stablecoin");
         uint256 indexMet;
-        if (stablecoinListLength > 1) {
-            for (uint256 i = 0; i < stablecoinListLength - 1; i++) {
-                if (stablecoinList[i] == stableMaster) {
-                    indexMet = 1;
-                    stablecoinList[i] = stablecoinList[stablecoinListLength - 1];
-                    break;
-                }
+        for (uint256 i = 0; i < stablecoinListLength - 1; i++) {
+            if (stablecoinList[i] == stableMaster) {
+                indexMet = 1;
+                stablecoinList[i] = stablecoinList[stablecoinListLength - 1];
+                break;
             }
         }
         require(indexMet == 1 || stablecoinList[stablecoinListLength - 1] == stableMaster, "incorrect stablecoin");
@@ -159,13 +156,14 @@ contract Core is CoreEvents, ICore {
 
     /// @notice Adds a new governor address
     /// @param _governor New governor address
-    /// @dev This function propagates the new governor role across all contracts of the protocol
+    /// @dev This function propagates the new governor role across most contracts of the protocol
     /// @dev Governor is also guardian everywhere in all contracts
     function addGovernor(address _governor) external override onlyGovernor zeroCheck(_governor) {
         require(!governorMap[_governor], "governor already added");
         governorMap[_governor] = true;
         _governorList.push(_governor);
-        // Propagates the changes to maintain consistency across all contracts
+        // Propagates the changes to maintain consistency across all the contracts that are attached to this
+        // `Core` contract
         for (uint256 i = 0; i < stablecoinList.length; i++) {
             // Since a zero address check has already been performed in this contract, there is no need
             // to repeat this check in underlying contracts
@@ -181,7 +179,7 @@ contract Core is CoreEvents, ICore {
     function removeGovernor(address _governor) external override onlyGovernor {
         // Checking if removing the governor will leave with at least more than one governor
         uint256 governorListLength = _governorList.length;
-        require(governorListLength > 1, "only one governor");
+        require(governorListLength > 1, "must have at least one governor");
         // Removing the governor from the list of governors
         // We still need to check if the address provided was well in the list
         uint256 indexMet;

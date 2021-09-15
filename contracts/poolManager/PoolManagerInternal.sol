@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GNU GPLv3
 
-pragma solidity ^0.8.2;
+pragma solidity ^0.8.7;
 
 import "./PoolManagerStorage.sol";
 
@@ -38,10 +38,8 @@ contract PoolManagerInternal is PoolManagerStorage, AccessControlUpgradeable {
         perpetualManager.grantRole(GUARDIAN_ROLE, _guardian);
         feeManager.grantRole(GUARDIAN_ROLE, _guardian);
         uint256 strategyListLength = strategyList.length;
-        if (strategyListLength > 0) {
-            for (uint256 i = 0; i < strategyListLength; i++) {
-                IStrategy(strategyList[i]).addGuardian(_guardian);
-            }
+        for (uint256 i = 0; i < strategyListLength; i++) {
+            IStrategy(strategyList[i]).addGuardian(_guardian);
         }
     }
 
@@ -52,10 +50,8 @@ contract PoolManagerInternal is PoolManagerStorage, AccessControlUpgradeable {
         perpetualManager.revokeRole(GUARDIAN_ROLE, guardian);
         feeManager.revokeRole(GUARDIAN_ROLE, guardian);
         uint256 strategyListLength = strategyList.length;
-        if (strategyListLength > 0) {
-            for (uint256 i = 0; i < strategyListLength; i++) {
-                IStrategy(strategyList[i]).revokeGuardian(guardian);
-            }
+        for (uint256 i = 0; i < strategyListLength; i++) {
+            IStrategy(strategyList[i]).revokeGuardian(guardian);
         }
     }
 

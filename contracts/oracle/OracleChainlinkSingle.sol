@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GNU GPLv3
 
 // contracts/oracle/OracleChainlinkSingle.sol
-pragma solidity ^0.8.2;
+pragma solidity ^0.8.7;
 
 import "./OracleAbstract.sol";
 import "./modules/ModuleChainlinkSingle.sol";
