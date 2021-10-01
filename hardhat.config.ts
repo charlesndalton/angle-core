@@ -1,3 +1,7 @@
+/// ENVVAR
+// - ENABLE_GAS_REPORT
+// - CI
+// - RUNS
 import 'dotenv/config';
 
 import yargs from 'yargs';
@@ -32,13 +36,46 @@ if (argv.enableGasReport) {
 
 const config: HardhatUserConfig = {
   solidity: {
-    version: '0.8.2',
-    settings: {
-      optimizer: {
-        enabled: true,
-        runs: 100,
+    compilers: [
+      {
+        version: '0.8.7',
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 1000000,
+          },
+          // debug: { revertStrings: 'strip' },
+        },
       },
-      // debug: { revertStrings: 'strip' },
+    ],
+    overrides: {
+      'contracts/stableMaster/StableMasterFront.sol': {
+        version: '0.8.7',
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 830,
+          },
+        },
+      },
+      'contracts/perpetualManager/PerpetualManagerFront.sol': {
+        version: '0.8.7',
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 300,
+          },
+        },
+      },
+      'contracts/mock/PerpetualManagerFrontUpgrade.sol': {
+        version: '0.8.7',
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 1,
+          },
+        },
+      },
     },
   },
   defaultNetwork: 'hardhat',
@@ -47,23 +84,19 @@ const config: HardhatUserConfig = {
       accounts: accounts('local'),
       live: argv.fork || false,
       blockGasLimit: 125e5,
+      hardfork: 'berlin',
       forking: {
         enabled: argv.fork || false,
         url: nodeUrl('fork'),
-        blockNumber: 12478945,
+        // blockNumber: 13242603,
       },
       mining: argv.disableAutoMining
         ? {
-          auto: false,
-          interval: 1000,
-        }
+            auto: false,
+            interval: 1000,
+          }
         : { auto: true },
       chainId: 1337,
-    },
-    ganache: {
-      url: 'http://127.0.0.1:8545',
-      gas: 12e6,
-      gasPrice: 40e9,
     },
     kovan: {
       live: false,
@@ -77,9 +110,17 @@ const config: HardhatUserConfig = {
       live: true,
       url: nodeUrl('rinkeby'),
       accounts: accounts('rinkeby'),
-      gas: 12e6,
+      gas: 'auto',
       gasPrice: 12e8,
       chainId: 4,
+    },
+    mainnet: {
+      live: false,
+      url: nodeUrl('mainnet'),
+      accounts: accounts('mainnet'),
+      gas: 'auto',
+      gasPrice: 12e8,
+      chainId: 1,
     },
     angleTestNet: {
       url: nodeUrl('angle'),
@@ -105,8 +146,8 @@ const config: HardhatUserConfig = {
     keeper2: 9,
   },
   mocha: {
-    timeout: 10000,
-    retries: 10,
+    timeout: 60000,
+    retries: argv.ci ? 10 : 0,
   },
   contractSizer: {
     alphaSort: true,
